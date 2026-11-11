@@ -20,7 +20,6 @@ import threading
 import time
 import traceback
 from collections import defaultdict
-from datetime import date
 
 import numpy as np
 
@@ -31,8 +30,12 @@ DEFAULTS = {
     "markets": ["TWSE", "TPEX"],
     "warmup": 250,
     "decay": 1.0,
+    "mode": "chip",          # chip＝籌碼集中度；box＝對照組：價格箱型寬度
+    "box_bars": 60,
     "conc_th": 0.15,
-    "low_pos": 0.80,
+    "low_pos": 1.0,          # 1 ＝ 不限低位（11/11 回測：低位條件反而拖累）
+    "min_mcap": 0,           # 億；0 ＝ 不限
+    "max_mcap": 0,
     "edge": "p95",
     "vol_mult": 1.5,
     "min_value": 20_000_000,
@@ -42,7 +45,10 @@ DEFAULTS = {
     "max_hold": 60,
     "fee_discount": 0.6,
     "skip_limit_up": True,
+    "sweep_key": "",         # 敏感度掃描：要掃的參數
+    "sweep": "",             # 逗號分隔的值，例如 0.10,0.15,0.20
 }
+SWEEP_KEYS = ("conc_th", "vol_mult", "low_pos", "max_mcap", "box_bars", "trail")
 HORIZONS = (5, 10, 20, 60)
 # 分層：20 日均成交額、市值（原始收盤 × 目前股本）
 TIERS = {
@@ -72,7 +78,25 @@ def norm_params(p):
             pass
     if out["edge"] not in ("p95", "p85"):
         out["edge"] = "p95"
+    if out["mode"] not in ("chip", "box"):
+        out["mode"] = "chip"
+    if out["sweep_key"] not in SWEEP_KEYS:
+        out["sweep_key"] = ""
+    out["sweep"] = str(out["sweep"] or "")
+    out["box_bars"] = max(10, out["box_bars"])
     return out
+
+
+def sweep_values(p):
+    if not p["sweep_key"] or not p["sweep"].strip():
+        return []
+    vals = []
+    for x in p["sweep"].replace("，", ",").split(","):
+        try:
+            vals.append(float(x))
+        except ValueError:
+            pass
+    return vals[:8]
 
 
 def rolling_mean(x, w):
@@ -98,15 +122,22 @@ def rolling_max(x, w):
 
 
 def run_stock(s, p, date_index):
-    """單一股票：回傳 (trades, signals, fwd_signal, baseline_acc)。"""
-    m = chips.compute(s, decay=p["decay"])
+    """單一股票：回傳 (trades, signals, fwd_signal, baseline, tiers)。"""
     n = len(s.c)
     c, o = s.c, s.o
     val20 = rolling_mean(s.val, 20)          # 原始成交金額
-
     vol20 = rolling_mean(s.v, 20)
     hi250 = rolling_max(s.h, 250)
-    edge = m[p["edge"]]
+    if p["mode"] == "box":
+        # 對照組：用最近 box_bars 根的高低區間取代籌碼分布，其他條件完全相同
+        bh = rolling_max(s.h, p["box_bars"])
+        bl = -rolling_max(-s.l, p["box_bars"])
+        conc = (bh - bl) / (bh + bl)
+        edge, low, poc, profit = bh, bl, (bh + bl) / 2, None
+    else:
+        m = chips.compute(s, decay=p["decay"])
+        conc, edge, low, poc, profit = m["conc90"], m[p["edge"]], m["p5"], m["poc"], m["profit"]
+    mcap = s.craw * s.shares / 1e8 if s.shares else None
     fee = FEE * p["fee_discount"]
     dates = s.dates
     start, end = p["start"] or "0000", p["end"] or "9999"
@@ -116,9 +147,14 @@ def run_stock(s, p, date_index):
                      else np.full(n, -1))}
 
     eligible = np.zeros(n, dtype=bool)
+    need_cap = p["max_mcap"] > 0 or p["min_mcap"] > 0
+    if need_cap and mcap is None:
+        return [], [], [], [np.full(n, np.nan) for _ in HORIZONS], tiers   # 無股本：市值條件無法判斷
     for i in range(max(p["warmup"], 20), n):
         eligible[i] = (val20[i] >= p["min_value"]) and (c[i] >= p["min_price"]) \
-            and start <= dates[i] <= end
+            and start <= dates[i] <= end \
+            and (p["max_mcap"] <= 0 or mcap[i] <= p["max_mcap"]) \
+            and (p["min_mcap"] <= 0 or mcap[i] >= p["min_mcap"])
 
     # 事件研究基準：每個合格日的前瞻報酬（t+1 開盤買、t+k 收盤）
     base = []
@@ -135,22 +171,22 @@ def run_stock(s, p, date_index):
         if not eligible[t]:
             continue
         j = t - 1
-        if np.isnan(m["conc90"][j]) or np.isnan(hi250[j]) or np.isnan(vol20[j]):
+        if np.isnan(conc[j]) or np.isnan(hi250[j]) or np.isnan(vol20[j]):
             continue
-        if m["conc90"][j] > p["conc_th"]:
+        if conc[j] > p["conc_th"]:
             continue
-        if m["poc"][j] > hi250[j] * p["low_pos"]:
+        if poc[j] > hi250[j] * p["low_pos"]:
             continue
         if not (c[t] > edge[j] and c[j] <= edge[j]):
             continue
         if s.v[t] < vol20[j] * p["vol_mult"]:
             continue
         sig = {"code": s.code, "name": s.name, "market": s.market, "date": dates[t],
-               "close": round(float(c[t]), 2), "conc90": round(float(m["conc90"][j]), 4),
-               "poc": round(float(m["poc"][j]), 2), "edge": round(float(edge[j]), 2),
-               "low": round(float(m["p5"][j]), 2),
+               "close": round(float(c[t]), 2), "conc90": round(float(conc[j]), 4),
+               "poc": round(float(poc[j]), 2), "edge": round(float(edge[j]), 2),
+               "low": round(float(low[j]), 2),
                "vol_x": round(float(s.v[t] / vol20[j]), 2),
-               "profit": round(float(m["profit"][t]), 3),
+               "profit": round(float(profit[t]), 3) if profit is not None else None,
                "val20": round(float(val20[t]) / 1e8, 2),
                "mcap": round(float(s.craw[t] * s.shares) / 1e8) if s.shares else None,
                "vt": int(tiers["val"][t]), "ct": int(tiers["cap"][t])}
@@ -168,7 +204,7 @@ def run_stock(s, p, date_index):
         if p["skip_limit_up"] and entry >= c[t] * 1.095:
             sig["skipped"] = "開盤近漲停"
             continue
-        stop = max(float(m["p5"][j]), entry * (1 - p["max_stop"]))
+        stop = max(float(low[j]), entry * (1 - p["max_stop"]))
         peak = entry
         exit_i, reason = None, None
         for i in range(entry_i, n):
@@ -201,7 +237,7 @@ def event_study(fwd, base_of):
     """fwd: [(date_idx, [各週期報酬], 分層)]；base_of(h, date_idx, tiers) 回傳同日基準。"""
     out = []
     for h, k in enumerate(HORIZONS):
-        sv, bv = [], []
+        sv, bv, dv = [], [], []
         for di, rets, tg in fwd:
             r = rets[h]
             if di is None or np.isnan(r):
@@ -211,18 +247,32 @@ def event_study(fwd, base_of):
                 continue
             sv.append(r)
             bv.append(b)
+            dv.append(di)
         sv, bv = np.array(sv), np.array(bv)
         if not len(sv):
             out.append({"h": k, "n": 0})
             continue
         ex = sv - bv
         sd = ex.std(ddof=1) if len(ex) > 2 else 0
-        out.append({"h": k, "n": int(len(sv)),
+        # 去極值：去掉超額報酬最高與最低各 5%
+        q = np.sort(ex)
+        cut = int(len(q) * 0.05)
+        trim = q[cut:len(q) - cut] if len(q) - 2 * cut > 0 else q
+        # 按日 t：同一天的訊號先平均成一個點，再算 t（同日多檔不獨立）
+        byd = defaultdict(list)
+        for d, e in zip(dv, ex):
+            byd[d].append(e)
+        dm = np.array([np.mean(v) for v in byd.values()])
+        sdd = dm.std(ddof=1) if len(dm) > 2 else 0
+        out.append({"h": k, "n": int(len(sv)), "days": int(len(dm)),
                     "sig": round(float(sv.mean()), 4),
                     "base": round(float(bv.mean()), 4),
                     "excess": round(float(ex.mean()), 4),
+                    "median": round(float(np.median(ex)), 4),
+                    "trim": round(float(trim.mean()), 4),
                     "hit": round(float((ex > 0).mean()), 4),
-                    "t": round(float(ex.mean() / (sd / np.sqrt(len(ex)))), 2) if sd > 0 else None})
+                    "t": round(float(ex.mean() / (sd / np.sqrt(len(ex)))), 2) if sd > 0 else None,
+                    "t_day": round(float(dm.mean() / (sdd / np.sqrt(len(dm)))), 2) if sdd > 0 else None})
     return out
 
 
@@ -265,8 +315,20 @@ class BacktestJob:
         st.update(running=True, error=None, done=0, run_id=None, msg="讀取資料")
         t0 = time.time()
         try:
-            st["run_id"] = run(p, st)
-            st["msg"] = f"完成（{time.time() - t0:.0f} 秒）"
+            vals = sweep_values(p)
+            if vals:
+                ids = []
+                for i, v in enumerate(vals):
+                    q = dict(p, **{p["sweep_key"]: int(v) if isinstance(DEFAULTS[p["sweep_key"]], int) else v})
+                    q["sweep_key"], q["sweep"] = "", ""      # 每組存成一般回測
+                    st["prefix"] = f"掃描 {p['sweep_key']}={v}（{i + 1}/{len(vals)}）"
+                    ids.append(run(q, st))
+                st["run_id"] = ids[-1]
+                st["msg"] = f"掃描完成 {len(ids)} 組（{time.time() - t0:.0f} 秒）"
+            else:
+                st["prefix"] = ""
+                st["run_id"] = run(p, st)
+                st["msg"] = f"完成（{time.time() - t0:.0f} 秒）"
         except Exception as e:
             traceback.print_exc()
             st["error"] = str(e)
@@ -292,7 +354,7 @@ def run(p, st=None):
     est = 0
     for k, (code, _, _) in enumerate(allc):
         st["done"] = k
-        st["msg"] = f"計算 {code}（{k}/{len(allc)}）"
+        st["msg"] = f"{st.get('prefix') or ''} 計算 {code}（{k}/{len(allc)}）".strip()
         s = chips.load(code, shares.get(code), con)
         if s is None:
             continue
@@ -325,7 +387,15 @@ def run(p, st=None):
             sub = [f for f in fwd if f[2][g] == k]
             ev = event_study(sub, lambda h, di, tg, g=g, k=k: tmean[g][k, h, di])
             tr = [t for t in trades if t[("vt" if g == "val" else "ct")] == k]
-            rows.append({"label": lab, "event": ev, "trades": summarize(tr)})
+            yrs = []
+            for y in sorted({all_dates[f[0]][:4] for f in sub if f[0] is not None}):
+                suby = [f for f in sub if f[0] is not None and all_dates[f[0]][:4] == y]
+                e20 = event_study(suby, lambda h, di, tg, g=g, k=k: tmean[g][k, h, di])[2]
+                ty = summarize([t for t in tr if t["entry_date"][:4] == y])
+                yrs.append({"year": y, "n": e20.get("n", 0), "excess": e20.get("excess"),
+                            "median": e20.get("median"), "trades": ty.get("n", 0),
+                            "pf": ty.get("pf"), "avg": ty.get("avg")})
+            rows.append({"label": lab, "event": ev, "trades": summarize(tr), "years": yrs})
         unk = [t for t in trades if g == "cap" and t["ct"] < 0]
         if unk:
             rows.append({"label": "無股本資料", "event": [], "trades": summarize(unk)})
@@ -350,7 +420,10 @@ def run(p, st=None):
                "stocks": len(allc), "turn_est": est,
                "range": [p["start"] or (all_dates[0] if all_dates else ""),
                          p["end"] or (last_date or "")],
-               "excess20": next((e.get("excess") for e in event if e["h"] == 20), None)}
+               "excess20": next((e.get("excess") for e in event if e["h"] == 20), None),
+               "median20": next((e.get("median") for e in event if e["h"] == 20), None),
+               "t20": next((e.get("t") for e in event if e["h"] == 20), None),
+               "t20_day": next((e.get("t_day") for e in event if e["h"] == 20), None)}
     result = {"event": event, "tiers": tier_out, "years": years, "reasons": reason_stats,
               "trades": trades, "latest": latest, "last_date": last_date}
     st["msg"] = "儲存結果"

@@ -1,5 +1,5 @@
 """離線測試：解析格式、還原價、籌碼模型、整體回測流程（合成資料）。"""
-import os, sys, tempfile, json
+import os, sys, tempfile
 from datetime import date, timedelta
 
 TMP = tempfile.mkdtemp()
@@ -121,4 +121,18 @@ check(sum(x["trades"].get("n", 0) + x["trades"].get("open", 0) for x in r["tiers
 check(t["mcap"] is not None and t["ct"] >= 0, "有股本 → 有市值分層")
 v = backtest.chip_view("1111", days[340])
 check(v and abs(sum(v["dist"]) - 1) < 0.02 and v["date"] == days[340], "籌碼圖資料")
+print("穩健性功能")
+e20 = next(e for e in r["event"] if e["h"] == 20)
+check(all(k in e20 for k in ("median", "trim", "t_day", "days")), "事件研究有中位數、去極值、按日 t")
+check("years" in r["tiers"]["cap"]["rows"][0], "分層有逐年")
+rb = db.get_run(backtest.run(backtest.norm_params({"mode": "box", "conc_th": 0.2, "min_value": 1e6})))
+check(rb["summary"]["signals"] >= 0 and rb["params"]["mode"] == "box", "對照組（價格箱型）可執行")
+rm = db.get_run(backtest.run(backtest.norm_params({"conc_th": 0.15, "min_value": 1e6, "low_pos": 0.85, "max_mcap": 1})))
+check(rm["summary"]["signals"] == 0, "市值上限 1 億 → 全部排除")
+before = len(db.list_runs())
+job = backtest.BacktestJob()
+job._run(backtest.norm_params({"min_value": 1e6, "sweep_key": "conc_th", "sweep": "0.10,0.15,0.20"}))
+runs = db.list_runs()
+check(len(runs) == before + 3 and {x["params"]["conc_th"] for x in runs[:3]} == {0.1, 0.15, 0.2}, "敏感度掃描存成 3 次回測")
+check(all(x["params"]["sweep"] == "" for x in runs[:3]), "掃描產生的回測不帶掃描設定")
 print(f"\n全部通過：{ok} 項")

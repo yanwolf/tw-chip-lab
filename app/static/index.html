@@ -65,7 +65,7 @@ tbody tr{cursor:pointer}tbody tr:hover{background:var(--gold-soft)}
 .note{color:var(--muted);font-size:12.5px;margin:6px 0 0}
 .runs{display:flex;gap:6px;flex-wrap:wrap}
 .runs button{font-size:12.5px;padding:5px 10px}
-.runs button.cur,#tierTabs button.cur{border-color:var(--gold);color:var(--gold)}
+#tierTabs button.cur{border-color:var(--gold);color:var(--gold)}
 canvas{width:100%;display:block}
 #login{position:fixed;inset:0;background:var(--bg);display:none;place-items:center;z-index:9}
 #login .panel{width:min(320px,90vw)}
@@ -111,10 +111,12 @@ canvas{width:100%;display:block}
 
 <!-- 回測 -->
 <section id="t-bt">
-  <div class="panel"><h2>策略參數：低位單峰密集 → 帶量突破</h2>
+  <div class="panel"><h2>策略參數：單峰密集 → 帶量突破</h2>
     <form id="pForm" onsubmit="return false">
     <fieldset><legend>訊號</legend><div class="grid">
-      <label>90% 集中度上限<input name="conc_th" type="number" step="0.01"></label>
+      <label>集中度來源<select name="mode"><option value="chip">籌碼峰（90% 集中度）</option><option value="box">對照組：價格箱型寬度</option></select></label>
+      <label>箱型天數（對照組）<input name="box_bars" type="number" step="10"></label>
+      <label>集中度上限<input name="conc_th" type="number" step="0.01"></label>
       <label>主峰 ≤ 250 日高 ×<input name="low_pos" type="number" step="0.05"></label>
       <label>突破的籌碼上緣<select name="edge"><option value="p95">95% 上緣</option><option value="p85">85% 上緣</option></select></label>
       <label>量 ≥ 20 日均量 ×<input name="vol_mult" type="number" step="0.1"></label>
@@ -130,6 +132,8 @@ canvas{width:100%;display:block}
     <fieldset><legend>篩選與期間</legend><div class="grid">
       <label>20 日均成交額 ≥<input name="min_value" type="number" step="5000000"></label>
       <label>股價 ≥<input name="min_price" type="number" step="1"></label>
+      <label>市值 ≥（億，0 不限）<input name="min_mcap" type="number" step="50"></label>
+      <label>市值 ≤（億，0 不限）<input name="max_mcap" type="number" step="50"></label>
       <label>回測起<input name="start" type="date"></label>
       <label>回測迄<input name="end" type="date"></label>
     </div>
@@ -138,11 +142,16 @@ canvas{width:100%;display:block}
       <label><input type="checkbox" name="mk_TPEX" checked>上櫃</label>
       <label><input type="checkbox" name="skip_limit_up" checked>開盤近漲停不進場</label>
     </div></fieldset>
+    <fieldset><legend>敏感度掃描（選填）</legend><div class="grid">
+      <label>要掃的參數<select name="sweep_key"><option value="">不掃描</option><option value="conc_th">集中度上限</option><option value="vol_mult">量倍數</option><option value="low_pos">低位倍數</option><option value="max_mcap">市值上限</option><option value="box_bars">箱型天數</option><option value="trail">移動停利回落</option></select></label>
+      <label style="grid-column:span 2">值（逗號分隔，最多 8 個）<input name="sweep" placeholder="0.10,0.15,0.20"></label>
+    </div><p class="note">每個值各跑一次完整回測、各存一筆紀錄，其他參數用上面的設定。</p></fieldset>
     <div class="row"><button class="act" id="bGo">執行回測</button><button class="ghost" id="bReset">恢復預設</button><span class="pill" id="bPill">閒置</span></div>
     <div class="bar"><i id="bBar"></i></div><div class="sub" id="bMsg"></div>
     </form>
   </div>
-  <div class="panel"><h2>回測紀錄</h2><div class="runs" id="runs"><span class="mut">還沒有回測紀錄。資料抓完後按「執行回測」。</span></div></div>
+  <div class="panel"><h2>回測紀錄</h2><div class="scroll" id="runs"><span class="mut">還沒有回測紀錄。資料抓完後按「執行回測」。</span></div>
+    <p class="note">點一列打開那次回測。t(日) 是同一天多個訊號先合併再算的 t 值，比較保守，以它為準。</p></div>
   <div id="result"></div>
 </section>
 
@@ -229,18 +238,20 @@ $('#bGo').onclick=async()=>{try{await post('/api/backtest',readForm());refresh()
 
 // ---------- 回測結果 ----------
 async function loadRuns(){const rs=await api('/api/runs');if(!rs.length)return;
-  $('#runs').innerHTML=rs.map(r=>`<button class="ghost${curRun?.id===r.id?' cur':''}" data-id="${r.id}">#${r.id}・${r.created.slice(5,16).replace('T',' ')}・${r.summary.n??0} 筆・20日超額 ${pct(r.summary.excess20)}</button>`).join('');
-  $$('#runs button').forEach(b=>b.onclick=()=>openRun(+b.dataset.id))}
-async function openRun(id){curRun=await api('/api/runs/'+id);fillForm(curRun.params);
-  $$('#runs button').forEach(b=>b.classList.toggle('cur',+b.dataset.id===id));renderRun()}
+  const cap=p=>(p.min_mcap||p.max_mcap)?`${p.min_mcap||0}～${p.max_mcap||'∞'}`:'全部';
+  $('#runs').innerHTML=`<table><thead><tr><th class="l">#</th><th class="l">模式</th><th>集中度</th><th>低位</th><th>量倍</th><th class="l">市值(億)</th><th>訊號</th><th>20日超額</th><th>中位數</th><th>t(日)</th><th>交易</th><th>PF</th></tr></thead><tbody>`+
+    rs.map(r=>{const p=r.params,s=r.summary;return `<tr data-id="${r.id}" tabindex="0"${curRun?.id===r.id?' style="background:var(--gold-soft)"':''}><td class="l">${r.id}</td><td class="l">${p.mode==='box'?'箱型':'籌碼'}</td><td>${p.conc_th}</td><td>${p.low_pos??'—'}</td><td>${p.vol_mult}</td><td class="l">${cap(p)}</td><td>${fmt(s.signals)}</td><td class="${cls(s.excess20)}">${pct(s.excess20,2)}</td><td class="${cls(s.median20)}">${pct(s.median20,2)}</td><td>${s.t20_day??'—'}</td><td>${fmt(s.n)}</td><td>${s.pf??'—'}</td></tr>`}).join('')+'</tbody></table>';
+  $$('#runs tr[data-id]').forEach(tr=>{tr.onclick=()=>openRun(+tr.dataset.id);tr.onkeydown=e=>{if(e.key==='Enter')openRun(+tr.dataset.id)}})}
+async function openRun(id){curRun=await api("/api/runs/"+id);fillForm({...DEF,...curRun.params});
+  $$('#runs tr[data-id]').forEach(tr=>tr.style.background=+tr.dataset.id===id?'var(--gold-soft)':'');renderRun()}
 
 function renderRun(){const r=curRun,s=r.summary;
   const e20=r.event.find(e=>e.h===20)||{};
   const verdict=e20.n?`訊號後 20 日平均超額報酬 <b class="${cls(e20.excess)}">${pct(e20.excess,2)}</b>`+
-    `<br><span class="sub">${fmt(e20.n)} 個訊號・勝過同日大盤比例 ${pct(e20.hit,0).replace('+','')}・t 值 ${e20.t??'—'}`+
-    `${e20.t!=null?(Math.abs(e20.t)>=2?'（統計上顯著）':'（不顯著，可能是運氣）'):''}</span>`:'這組參數沒有產生任何訊號，試著放寬集中度或低位條件。';
-  const ev=`<table><thead><tr><th class="l">持有</th><th>訊號數</th><th>訊號報酬</th><th>同日大盤</th><th>超額</th><th>勝出率</th><th>t 值</th></tr></thead><tbody>`+
-    r.event.map(e=>`<tr tabindex="-1"><td class="l">${e.h} 日</td><td>${fmt(e.n)}</td><td class="${cls(e.sig)}">${pct(e.sig,2)}</td><td class="${cls(e.base)}">${pct(e.base,2)}</td><td class="${cls(e.excess)}">${pct(e.excess,2)}</td><td>${e.hit!=null?(e.hit*100).toFixed(0)+'%':'—'}</td><td>${e.t??'—'}</td></tr>`).join('')+'</tbody></table>';
+    `<br><span class="sub">${fmt(e20.n)} 個訊號（${fmt(e20.days)} 個交易日）・中位數 ${pct(e20.median,2)}・去極值 ${pct(e20.trim,2)}・勝過同層比例 ${pct(e20.hit,0).replace('+','')}`+
+    `<br>t 值 ${e20.t??'—'}・按日 t ${e20.t_day??'—'}${e20.t_day!=null?(Math.abs(e20.t_day)>=2?'（按日仍顯著）':'（按日不顯著，可能是同日訊號堆出來的）'):''}</span>`:'這組參數沒有產生任何訊號，試著放寬集中度或低位條件。';
+  const ev=`<table><thead><tr><th class="l">持有</th><th>訊號數</th><th>訊號報酬</th><th>同日大盤</th><th>超額</th><th>中位數</th><th>去極值</th><th>勝出率</th><th>t 值</th><th>t(日)</th></tr></thead><tbody>`+
+    r.event.map(e=>`<tr tabindex="-1"><td class="l">${e.h} 日</td><td>${fmt(e.n)}</td><td class="${cls(e.sig)}">${pct(e.sig,2)}</td><td class="${cls(e.base)}">${pct(e.base,2)}</td><td class="${cls(e.excess)}">${pct(e.excess,2)}</td><td class="${cls(e.median)}">${pct(e.median,2)}</td><td class="${cls(e.trim)}">${pct(e.trim,2)}</td><td>${e.hit!=null?(e.hit*100).toFixed(0)+'%':'—'}</td><td>${e.t??'—'}</td><td>${e.t_day??'—'}</td></tr>`).join('')+'</tbody></table>';
   const kv=[['已平倉交易',fmt(s.n)],['勝率',s.win!=null?(s.win*100).toFixed(1)+'%':'—'],['平均報酬',pct(s.avg,2),cls(s.avg)],
     ['中位數',pct(s.median,2),cls(s.median)],['平均獲利',pct(s.avg_win,1),'up'],['平均虧損',pct(s.avg_loss,1),'down'],
     ['獲利因子',s.pf??'—'],['平均持有',s.days!=null?s.days+' 日':'—'],['持有中',fmt(s.open)],['開盤漲停跳過',fmt(s.skipped)]]
@@ -256,7 +267,7 @@ function renderRun(){const r=curRun,s=r.summary;
     <p class="note">期間 ${s.range[0]} ～ ${s.range[1]}・掃描 ${fmt(s.stocks)} 檔${s.turn_est?`・其中 ${s.turn_est} 檔無股本資料，換手率用估計值`:''}。「同日大盤」是同一天所有符合流動性條件股票的平均報酬，超額報酬才代表訊號本身的價值。</p></div>
   <div class="panel"><h2>事件研究</h2><div class="scroll">${ev}</div></div>
   ${r.tiers?`<div class="panel"><h2>分層：哪一段股票適用</h2>
-    <div class="row" style="margin-bottom:8px" id="tierTabs">${Object.entries(r.tiers).map(([g,x])=>`<button class="ghost${g===tierG?' cur':''}" data-g="${g}">依${x.name}</button>`).join('')}</div>
+    <div class="row" style="margin-bottom:8px" id="tierTabs">${Object.entries(r.tiers).map(([g,x])=>`<button class="ghost${g===tierG?' cur':''}" data-g="${g}">依${x.name}</button>`).join('')}<label style="margin-left:auto"><input type="checkbox" id="tierYears"${tierYears?' checked':''}>逐年</label></div>
     <div class="scroll" id="tierTable"></div>
     <p class="note">超額報酬是和「同一層」股票的同日平均比較，避免把小型股本身的漲跌當成訊號的功勞。成交額為訊號日前 20 日平均，市值用目前股本估算。</p></div>`:''}
   <div class="panel"><h2>交易統計（含手續費、證交稅）</h2><div class="grid">${kv}</div><p class="note">出場原因：${rs||'—'}</p></div>
@@ -267,13 +278,17 @@ function renderRun(){const r=curRun,s=r.summary;
   $('#tFilter').oninput=e=>{tradeFilter=e.target.value;tLimit=200;renderTrades()};
   $('#tMore').onclick=()=>{tLimit+=300;renderTrades()};
   $('#tDel').onclick=async()=>{if(!confirm('刪除回測 #'+r.id+'？'))return;await post(`/api/runs/${r.id}/delete`);curRun=null;$('#result').innerHTML='';$('#runs').innerHTML='';loadRuns()};
+  $('#tierYears').onchange=e=>{tierYears=e.target.checked;renderTier()};
   $$('#tierTabs button').forEach(b=>b.onclick=()=>{tierG=b.dataset.g;$$('#tierTabs button').forEach(x=>x.classList.toggle('cur',x===b));renderTier()});
   bindRows($('#result'));renderTier();renderTrades()}
-let tierG='val';
-function renderTier(){if(!curRun.tiers)return;const rows=curRun.tiers[tierG].rows;
-  const ev=(x,h)=>x.event.find(e=>e.h===h)||{};
-  $('#tierTable').innerHTML=`<table><thead><tr><th class="l">${curRun.tiers[tierG].name}</th><th>訊號數</th><th>20日超額</th><th>t 值</th><th>60日超額</th><th>交易數</th><th>勝率</th><th>平均報酬</th></tr></thead><tbody>`+
-    rows.map(x=>{const a=ev(x,20),b=ev(x,60),t=x.trades;return `<tr tabindex="-1"><td class="l">${x.label}</td><td>${fmt(a.n??0)}</td><td class="${cls(a.excess)}">${pct(a.excess,2)}</td><td>${a.t??'—'}${a.t!=null&&Math.abs(a.t)>=2?' ✓':''}</td><td class="${cls(b.excess)}">${pct(b.excess,2)}</td><td>${fmt(t.n??0)}</td><td>${t.win!=null?(t.win*100).toFixed(0)+'%':'—'}</td><td class="${cls(t.avg)}">${pct(t.avg,2)}</td></tr>`}).join('')+'</tbody></table>'}
+let tierG='val',tierYears=false;
+function renderTier(){if(!curRun.tiers)return;const rows=curRun.tiers[tierG].rows,name=curRun.tiers[tierG].name;
+  const ev=(x,h)=>x.event.find(e=>e.h===h)||{},tv=v=>v==null?'—':v+(Math.abs(v)>=2?' ✓':'');
+  if(tierYears){
+    $('#tierTable').innerHTML=`<table><thead><tr><th class="l">${name}</th><th class="l">年度</th><th>訊號數</th><th>20日超額</th><th>中位數</th><th>交易數</th><th>平均報酬</th><th>PF</th></tr></thead><tbody>`+
+      rows.filter(x=>x.years).flatMap(x=>x.years.map((y,i)=>`<tr tabindex="-1"><td class="l">${i?'':x.label}</td><td class="l">${y.year}</td><td>${fmt(y.n)}</td><td class="${cls(y.excess)}">${pct(y.excess,2)}</td><td class="${cls(y.median)}">${pct(y.median,2)}</td><td>${fmt(y.trades)}</td><td class="${cls(y.avg)}">${pct(y.avg,2)}</td><td>${y.pf??'—'}</td></tr>`)).join('')+'</tbody></table>';return}
+  $('#tierTable').innerHTML=`<table><thead><tr><th class="l">${name}</th><th>訊號數</th><th>20日超額</th><th>中位數</th><th>去極值</th><th>t 值</th><th>t(日)</th><th>60日超額</th><th>交易數</th><th>勝率</th><th>平均報酬</th><th>PF</th></tr></thead><tbody>`+
+    rows.map(x=>{const a=ev(x,20),b=ev(x,60),t=x.trades;return `<tr tabindex="-1"><td class="l">${x.label}</td><td>${fmt(a.n??0)}</td><td class="${cls(a.excess)}">${pct(a.excess,2)}</td><td class="${cls(a.median)}">${pct(a.median,2)}</td><td class="${cls(a.trim)}">${pct(a.trim,2)}</td><td>${a.t??'—'}</td><td>${tv(a.t_day)}</td><td class="${cls(b.excess)}">${pct(b.excess,2)}</td><td>${fmt(t.n??0)}</td><td>${t.win!=null?(t.win*100).toFixed(0)+'%':'—'}</td><td class="${cls(t.avg)}">${pct(t.avg,2)}</td><td>${t.pf??'—'}</td></tr>`}).join('')+'</tbody></table>'}
 let tLimit=200;
 const COLS=[['date','訊號日','l'],['code','代號','l'],['name','名稱','l'],['entry','進場'],['exit','出場'],['ret','報酬'],['days','天數'],['reason','原因','l'],['conc90','集中度'],['vol_x','量比'],['val20','成交額(億)'],['mcap','市值(億)']];
 function renderTrades(){let t=curRun.trades;const q=tradeFilter.trim();
