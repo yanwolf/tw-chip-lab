@@ -144,7 +144,7 @@ canvas{width:100%;display:block}
     </div></fieldset>
     <fieldset><legend>敏感度掃描（選填）</legend><div class="grid">
       <label>要掃的參數<select name="sweep_key"><option value="">不掃描</option><option value="conc_th">集中度上限</option><option value="vol_mult">量倍數</option><option value="low_pos">低位倍數</option><option value="max_mcap">市值上限</option><option value="box_bars">箱型天數</option><option value="trail">移動停利回落</option></select></label>
-      <label style="grid-column:span 2">值（逗號分隔，最多 8 個）<input name="sweep" placeholder="0.10,0.15,0.20"></label>
+      <label style="grid-column:span 2">值（逗號或頓號分隔，最多 8 個）<input name="sweep" placeholder="例：0.10, 0.15, 0.20（要自己輸入）"></label>
     </div><p class="note">每個值各跑一次完整回測、各存一筆紀錄，其他參數用上面的設定。</p></fieldset>
     <div class="row"><button class="act" id="bGo">執行回測</button><button class="ghost" id="bReset">恢復預設</button><span class="pill" id="bPill">閒置</span></div>
     <div class="bar"><i id="bBar"></i></div><div class="sub" id="bMsg"></div>

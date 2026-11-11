@@ -90,12 +90,15 @@ def norm_params(p):
 def sweep_values(p):
     if not p["sweep_key"] or not p["sweep"].strip():
         return []
+    import re
     vals = []
-    for x in p["sweep"].replace("，", ",").split(","):
+    for x in re.split(r"[,，、;；\s]+", p["sweep"].strip()):
+        if not x:
+            continue
         try:
             vals.append(float(x))
         except ValueError:
-            pass
+            raise ValueError(f"掃描值「{x}」不是數字")
     return vals[:8]
 
 
@@ -306,6 +309,10 @@ class BacktestJob:
         if self.running():
             return False
         p = norm_params(params)
+        if p["sweep"].strip() and not p["sweep_key"]:
+            raise ValueError("填了掃描值，但沒有選要掃的參數")
+        if p["sweep_key"] and len(sweep_values(p)) < 2:
+            raise ValueError("掃描至少要 2 個值，用逗號或頓號分隔")
         self.thread = threading.Thread(target=self._run, args=(p,), daemon=True)
         self.thread.start()
         return True

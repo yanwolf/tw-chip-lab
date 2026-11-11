@@ -135,4 +135,11 @@ job._run(backtest.norm_params({"min_value": 1e6, "sweep_key": "conc_th", "sweep"
 runs = db.list_runs()
 check(len(runs) == before + 3 and {x["params"]["conc_th"] for x in runs[:3]} == {0.1, 0.15, 0.2}, "敏感度掃描存成 3 次回測")
 check(all(x["params"]["sweep"] == "" for x in runs[:3]), "掃描產生的回測不帶掃描設定")
+check(backtest.sweep_values(backtest.norm_params({"sweep_key": "conc_th", "sweep": "0.10、0.15 0.20"})) == [0.1, 0.15, 0.2],
+      "掃描值接受頓號、空白分隔")
+try:
+    backtest.BacktestJob().start({"sweep": "0.1,0.2"}); bad = False
+except ValueError:
+    bad = True
+check(bad, "填了掃描值但沒選參數 → 直接報錯，不會默默跑一般回測")
 print(f"\n全部通過：{ok} 項")
