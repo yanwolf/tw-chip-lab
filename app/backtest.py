@@ -44,6 +44,11 @@ DEFAULTS = {
     "skip_limit_up": True,
 }
 HORIZONS = (5, 10, 20, 60)
+# 分層：20 日均成交額、市值（原始收盤 × 目前股本）
+TIERS = {
+    "val": {"name": "成交額", "cuts": [1e8, 5e8], "labels": ["< 1 億", "1～5 億", "> 5 億"]},
+    "cap": {"name": "市值", "cuts": [1e10, 5e10], "labels": ["< 100 億", "100～500 億", "> 500 億"]},
+}
 FEE = 0.001425
 TAX = 0.003
 
@@ -106,6 +111,10 @@ def run_stock(s, p, date_index):
     dates = s.dates
     start, end = p["start"] or "0000", p["end"] or "9999"
 
+    tiers = {"val": np.digitize(np.nan_to_num(val20), TIERS["val"]["cuts"]),
+             "cap": (np.digitize(s.craw * s.shares, TIERS["cap"]["cuts"]) if s.shares
+                     else np.full(n, -1))}
+
     eligible = np.zeros(n, dtype=bool)
     for i in range(max(p["warmup"], 20), n):
         eligible[i] = (val20[i] >= p["min_value"]) and (c[i] >= p["min_price"]) \
@@ -141,9 +150,13 @@ def run_stock(s, p, date_index):
                "poc": round(float(m["poc"][j]), 2), "edge": round(float(edge[j]), 2),
                "low": round(float(m["p5"][j]), 2),
                "vol_x": round(float(s.v[t] / vol20[j]), 2),
-               "profit": round(float(m["profit"][t]), 3)}
+               "profit": round(float(m["profit"][t]), 3),
+               "val20": round(float(val20[t]) / 1e8, 2),
+               "mcap": round(float(s.craw[t] * s.shares) / 1e8) if s.shares else None,
+               "vt": int(tiers["val"][t]), "ct": int(tiers["cap"][t])}
         signals.append(sig)
-        fwd.append((date_index.get(dates[t]), [float(b[t]) for b in base]))
+        fwd.append((date_index.get(dates[t]), [float(b[t]) for b in base],
+                    {"val": sig["vt"], "cap": sig["ct"]}))
         if t <= hold_until:
             sig["in_pos"] = True        # 已持有同一檔，不重複進場（仍列入事件研究）
             continue
@@ -181,7 +194,36 @@ def run_stock(s, p, date_index):
                        "exit": round(px, 2), "reason": reason, "open": open_pos,
                        "days": int(exit_i - entry_i), "ret": round(net, 4)})
         hold_until = exit_i
-    return trades, signals, fwd, base, eligible
+    return trades, signals, fwd, base, tiers
+
+
+def event_study(fwd, base_of):
+    """fwd: [(date_idx, [各週期報酬], 分層)]；base_of(h, date_idx, tiers) 回傳同日基準。"""
+    out = []
+    for h, k in enumerate(HORIZONS):
+        sv, bv = [], []
+        for di, rets, tg in fwd:
+            r = rets[h]
+            if di is None or np.isnan(r):
+                continue
+            b = base_of(h, di, tg)
+            if np.isnan(b):
+                continue
+            sv.append(r)
+            bv.append(b)
+        sv, bv = np.array(sv), np.array(bv)
+        if not len(sv):
+            out.append({"h": k, "n": 0})
+            continue
+        ex = sv - bv
+        sd = ex.std(ddof=1) if len(ex) > 2 else 0
+        out.append({"h": k, "n": int(len(sv)),
+                    "sig": round(float(sv.mean()), 4),
+                    "base": round(float(bv.mean()), 4),
+                    "excess": round(float(ex.mean()), 4),
+                    "hit": round(float((ex > 0).mean()), 4),
+                    "t": round(float(ex.mean() / (sd / np.sqrt(len(ex)))), 2) if sd > 0 else None})
+    return out
 
 
 def summarize(trades):
@@ -244,6 +286,8 @@ def run(p, st=None):
     nd = len(all_dates)
     bsum = np.zeros((len(HORIZONS), nd))
     bcnt = np.zeros((len(HORIZONS), nd))
+    tsum = {g: np.zeros((3, len(HORIZONS), nd)) for g in TIERS}
+    tcnt = {g: np.zeros((3, len(HORIZONS), nd)) for g in TIERS}
     trades, signals, fwd = [], [], []
     est = 0
     for k, (code, _, _) in enumerate(allc):
@@ -253,7 +297,7 @@ def run(p, st=None):
         if s is None:
             continue
         est += s.turn_est
-        tr, sg, fw, base, elig = run_stock(s, p, date_index)
+        tr, sg, fw, base, tiers = run_stock(s, p, date_index)
         trades += tr
         signals += sg
         fwd += fw
@@ -262,32 +306,30 @@ def run(p, st=None):
             ok = ~np.isnan(b)
             np.add.at(bsum[h], idx[ok], b[ok])
             np.add.at(bcnt[h], idx[ok], 1)
+            for g, tv in tiers.items():
+                for k in range(3):
+                    sel = ok & (tv == k)
+                    np.add.at(tsum[g][k, h], idx[sel], b[sel])
+                    np.add.at(tcnt[g][k, h], idx[sel], 1)
     con.close()
 
-    # 事件研究
+    # 事件研究：整體對比全市場；分層對比「同一層」的同日平均（避免把小型股的 beta 當成超額）
     with np.errstate(invalid="ignore", divide="ignore"):
         bmean = bsum / bcnt
-    event = []
-    for h, k in enumerate(HORIZONS):
-        sv, bv = [], []
-        for di, rets in fwd:
-            r = rets[h]
-            if di is None or np.isnan(r) or np.isnan(bmean[h, di]):
-                continue
-            sv.append(r)
-            bv.append(bmean[h, di])
-        sv, bv = np.array(sv), np.array(bv)
-        if len(sv):
-            ex = sv - bv
-            event.append({"h": k, "n": int(len(sv)),
-                          "sig": round(float(sv.mean()), 4),
-                          "base": round(float(bv.mean()), 4),
-                          "excess": round(float(ex.mean()), 4),
-                          "hit": round(float((ex > 0).mean()), 4),
-                          "t": round(float(ex.mean() / (ex.std(ddof=1) / np.sqrt(len(ex)))), 2)
-                          if len(ex) > 2 and ex.std() > 0 else None})
-        else:
-            event.append({"h": k, "n": 0})
+        tmean = {g: tsum[g] / tcnt[g] for g in TIERS}
+    event = event_study(fwd, lambda h, di, tg: bmean[h, di])
+    tier_out = {}
+    for g, cfg in TIERS.items():
+        rows = []
+        for k, lab in enumerate(cfg["labels"]):
+            sub = [f for f in fwd if f[2][g] == k]
+            ev = event_study(sub, lambda h, di, tg, g=g, k=k: tmean[g][k, h, di])
+            tr = [t for t in trades if t[("vt" if g == "val" else "ct")] == k]
+            rows.append({"label": lab, "event": ev, "trades": summarize(tr)})
+        unk = [t for t in trades if g == "cap" and t["ct"] < 0]
+        if unk:
+            rows.append({"label": "無股本資料", "event": [], "trades": summarize(unk)})
+        tier_out[g] = {"name": cfg["name"], "rows": rows}
 
     by_year = defaultdict(list)
     for t in trades:
@@ -309,7 +351,7 @@ def run(p, st=None):
                "range": [p["start"] or (all_dates[0] if all_dates else ""),
                          p["end"] or (last_date or "")],
                "excess20": next((e.get("excess") for e in event if e["h"] == 20), None)}
-    result = {"event": event, "years": years, "reasons": reason_stats,
+    result = {"event": event, "tiers": tier_out, "years": years, "reasons": reason_stats,
               "trades": trades, "latest": latest, "last_date": last_date}
     st["msg"] = "儲存結果"
     return db.save_run(p, summary, result)

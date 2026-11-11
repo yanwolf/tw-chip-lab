@@ -18,7 +18,7 @@ NBINS = 300
 
 class Series:
     __slots__ = ("code", "name", "market", "dates", "o", "h", "l", "c", "v", "amt",
-                 "val", "turn", "turn_est", "events")
+                 "val", "craw", "shares", "turn", "turn_est", "events")
 
 
 def load(code, shares=None, con=None):
@@ -58,6 +58,8 @@ def load(code, shares=None, con=None):
     s.amt = np.clip(avg_raw * factor, s.l, s.h)          # 這裡存「還原均價」
     s.v = vol
     s.val = np.where(amt > 0, amt, raw[:, 3] * vol)       # 原始成交金額
+    s.craw = raw[:, 3]                                   # 原始收盤（算市值用）
+    s.shares = shares if shares and shares > 0 else None
     if shares and shares > 0:
         s.turn = np.clip(vol / shares, 0, 1)
         s.turn_est = False

@@ -115,6 +115,10 @@ check("1111" in codes_sig, f"合成的低位突破股有觸發（{len(r['trades'
 t = next(t for t in r["trades"] if t["code"] == "1111")
 check(t["entry_date"] > t["date"], "進場在訊號日之後（無前視）")
 check(len(r["event"]) == 4, "事件研究 4 個週期")
+check(set(r["tiers"]) == {"val", "cap"} and len(r["tiers"]["val"]["rows"]) == 3, "分層統計：成交額、市值")
+check(sum(x["trades"].get("n", 0) + x["trades"].get("open", 0) for x in r["tiers"]["val"]["rows"]) == len(r["trades"]),
+      "分層交易數加總 = 全部交易")
+check(t["mcap"] is not None and t["ct"] >= 0, "有股本 → 有市值分層")
 v = backtest.chip_view("1111", days[340])
 check(v and abs(sum(v["dist"]) - 1) < 0.02 and v["date"] == days[340], "籌碼圖資料")
 print(f"\n全部通過：{ok} 項")

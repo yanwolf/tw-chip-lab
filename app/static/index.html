@@ -65,7 +65,7 @@ tbody tr{cursor:pointer}tbody tr:hover{background:var(--gold-soft)}
 .note{color:var(--muted);font-size:12.5px;margin:6px 0 0}
 .runs{display:flex;gap:6px;flex-wrap:wrap}
 .runs button{font-size:12.5px;padding:5px 10px}
-.runs button.cur{border-color:var(--gold);color:var(--gold)}
+.runs button.cur,#tierTabs button.cur{border-color:var(--gold);color:var(--gold)}
 canvas{width:100%;display:block}
 #login{position:fixed;inset:0;background:var(--bg);display:none;place-items:center;z-index:9}
 #login .panel{width:min(320px,90vw)}
@@ -255,6 +255,10 @@ function renderRun(){const r=curRun,s=r.summary;
   <div class="panel"><p class="verdict">${verdict}</p>
     <p class="note">期間 ${s.range[0]} ～ ${s.range[1]}・掃描 ${fmt(s.stocks)} 檔${s.turn_est?`・其中 ${s.turn_est} 檔無股本資料，換手率用估計值`:''}。「同日大盤」是同一天所有符合流動性條件股票的平均報酬，超額報酬才代表訊號本身的價值。</p></div>
   <div class="panel"><h2>事件研究</h2><div class="scroll">${ev}</div></div>
+  ${r.tiers?`<div class="panel"><h2>分層：哪一段股票適用</h2>
+    <div class="row" style="margin-bottom:8px" id="tierTabs">${Object.entries(r.tiers).map(([g,x])=>`<button class="ghost${g===tierG?' cur':''}" data-g="${g}">依${x.name}</button>`).join('')}</div>
+    <div class="scroll" id="tierTable"></div>
+    <p class="note">超額報酬是和「同一層」股票的同日平均比較，避免把小型股本身的漲跌當成訊號的功勞。成交額為訊號日前 20 日平均，市值用目前股本估算。</p></div>`:''}
   <div class="panel"><h2>交易統計（含手續費、證交稅）</h2><div class="grid">${kv}</div><p class="note">出場原因：${rs||'—'}</p></div>
   <div class="panel"><h2>逐年</h2><div class="scroll">${yr}</div></div>
   <div class="panel"><h2>最新訊號（${r.last_date||'—'} 收盤）</h2><div class="scroll">${latest}</div></div>
@@ -263,15 +267,21 @@ function renderRun(){const r=curRun,s=r.summary;
   $('#tFilter').oninput=e=>{tradeFilter=e.target.value;tLimit=200;renderTrades()};
   $('#tMore').onclick=()=>{tLimit+=300;renderTrades()};
   $('#tDel').onclick=async()=>{if(!confirm('刪除回測 #'+r.id+'？'))return;await post(`/api/runs/${r.id}/delete`);curRun=null;$('#result').innerHTML='';$('#runs').innerHTML='';loadRuns()};
-  bindRows($('#result'));renderTrades()}
+  $$('#tierTabs button').forEach(b=>b.onclick=()=>{tierG=b.dataset.g;$$('#tierTabs button').forEach(x=>x.classList.toggle('cur',x===b));renderTier()});
+  bindRows($('#result'));renderTier();renderTrades()}
+let tierG='val';
+function renderTier(){if(!curRun.tiers)return;const rows=curRun.tiers[tierG].rows;
+  const ev=(x,h)=>x.event.find(e=>e.h===h)||{};
+  $('#tierTable').innerHTML=`<table><thead><tr><th class="l">${curRun.tiers[tierG].name}</th><th>訊號數</th><th>20日超額</th><th>t 值</th><th>60日超額</th><th>交易數</th><th>勝率</th><th>平均報酬</th></tr></thead><tbody>`+
+    rows.map(x=>{const a=ev(x,20),b=ev(x,60),t=x.trades;return `<tr tabindex="-1"><td class="l">${x.label}</td><td>${fmt(a.n??0)}</td><td class="${cls(a.excess)}">${pct(a.excess,2)}</td><td>${a.t??'—'}${a.t!=null&&Math.abs(a.t)>=2?' ✓':''}</td><td class="${cls(b.excess)}">${pct(b.excess,2)}</td><td>${fmt(t.n??0)}</td><td>${t.win!=null?(t.win*100).toFixed(0)+'%':'—'}</td><td class="${cls(t.avg)}">${pct(t.avg,2)}</td></tr>`}).join('')+'</tbody></table>'}
 let tLimit=200;
-const COLS=[['date','訊號日','l'],['code','代號','l'],['name','名稱','l'],['entry','進場'],['exit','出場'],['ret','報酬'],['days','天數'],['reason','原因','l'],['conc90','集中度'],['vol_x','量比']];
+const COLS=[['date','訊號日','l'],['code','代號','l'],['name','名稱','l'],['entry','進場'],['exit','出場'],['ret','報酬'],['days','天數'],['reason','原因','l'],['conc90','集中度'],['vol_x','量比'],['val20','成交額(億)'],['mcap','市值(億)']];
 function renderTrades(){let t=curRun.trades;const q=tradeFilter.trim();
   if(q)t=t.filter(x=>x.code.includes(q)||x.name.includes(q));
   t=[...t].sort((a,b)=>(a[sortKey]>b[sortKey]?1:a[sortKey]<b[sortKey]?-1:0)*sortDir);
   $('#tCount').textContent=`${fmt(t.length)} 筆`;
   $('#tTable').innerHTML=`<table><thead><tr>${COLS.map(([k,n,c])=>`<th class="${c||''}" data-k="${k}">${n}${sortKey===k?(sortDir>0?' ▲':' ▼'):''}</th>`).join('')}</tr></thead><tbody>`+
-    t.slice(0,tLimit).map(x=>`<tr data-code="${x.code}" data-date="${x.date}" tabindex="0"><td class="l">${x.date}</td><td class="l">${x.code}</td><td class="l">${esc(x.name)}</td><td>${x.entry}</td><td>${x.exit}</td><td class="${cls(x.ret)}">${pct(x.ret,1)}</td><td>${x.days}</td><td class="l${x.open?' mut':''}">${x.reason}</td><td>${(x.conc90*100).toFixed(1)}%</td><td>${x.vol_x}×</td></tr>`).join('')+'</tbody></table>';
+    t.slice(0,tLimit).map(x=>`<tr data-code="${x.code}" data-date="${x.date}" tabindex="0"><td class="l">${x.date}</td><td class="l">${x.code}</td><td class="l">${esc(x.name)}</td><td>${x.entry}</td><td>${x.exit}</td><td class="${cls(x.ret)}">${pct(x.ret,1)}</td><td>${x.days}</td><td class="l${x.open?' mut':''}">${x.reason}</td><td>${(x.conc90*100).toFixed(1)}%</td><td>${x.vol_x}×</td><td>${x.val20??'—'}</td><td>${x.mcap!=null?fmt(x.mcap):'—'}</td></tr>`).join('')+'</tbody></table>';
   $('#tMore').hidden=t.length<=tLimit;
   $$('#tTable th').forEach(th=>th.onclick=()=>{const k=th.dataset.k;sortDir=sortKey===k?-sortDir:(k==='ret'?-1:1);sortKey=k;renderTrades()});
   bindRows($('#tTable'))}
