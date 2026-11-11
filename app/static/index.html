@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>籌碼峰實驗室</title>
+<style>
+:root{
+  --bg:#EDEFF2; --surface:#FFFFFF; --ink:#18212B; --muted:#66717E; --line:#D5DAE0;
+  --gold:#B07F22; --gold-soft:rgba(176,127,34,.16); --blue:#4A6A8A; --blue-soft:rgba(74,106,138,.28);
+  --up:#D0393B; --down:#17895A; --warn:#C0362C;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#12171D; --surface:#1A2129; --ink:#E4E8EC; --muted:#8D98A5; --line:#2A333D;
+  --gold:#D9A647; --gold-soft:rgba(217,166,71,.18); --blue:#7C9CC0; --blue-soft:rgba(124,156,192,.30);
+  --up:#F05A5C; --down:#2FB57A; --warn:#F06A5E; color-scheme:dark;
+}}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink)}
+body{font:15px/1.55 "PingFang TC","Noto Sans TC","Microsoft JhengHei",system-ui,sans-serif;
+  font-variant-numeric:tabular-nums;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+.wrap{max-width:980px;margin:0 auto;padding:16px 14px 60px}
+header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}
+h1{font-size:22px;margin:0;letter-spacing:.02em;font-weight:700}
+h1 span{display:inline-block;width:10px;height:22px;margin-right:8px;vertical-align:-3px;
+  background:linear-gradient(to top,var(--gold) 0 30%,transparent 30% 40%,var(--gold) 40% 75%,transparent 75% 85%,var(--gold) 85%)}
+.sub{color:var(--muted);font-size:13px}
+nav{display:flex;margin:14px 0 16px;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--surface)}
+nav button{flex:1;border:0;background:none;color:var(--muted);padding:10px 0;font:inherit;cursor:pointer}
+nav button[aria-selected=true]{background:var(--ink);color:var(--bg);font-weight:600}
+section{display:none}section.on{display:block}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:14px}
+.panel h2{font-size:16px;margin:0 0 10px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px}
+.kv b{display:block;font-size:19px;font-weight:650}
+.kv small{color:var(--muted);font-size:12px}
+label{display:block;font-size:13px;color:var(--muted)}
+input,select{width:100%;margin-top:3px;padding:8px 9px;border:1px solid var(--line);border-radius:8px;
+  background:var(--bg);color:var(--ink);font:inherit}
+input[type=checkbox]{width:auto;margin-right:6px}
+fieldset{border:0;padding:0;margin:0 0 12px}
+legend{font-weight:600;font-size:14px;margin-bottom:6px;padding:0}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+button.act{border:0;border-radius:9px;padding:10px 16px;font:inherit;font-weight:600;cursor:pointer;
+  background:var(--gold);color:#fff}
+button.ghost{border:1px solid var(--line);border-radius:9px;padding:9px 14px;font:inherit;cursor:pointer;
+  background:none;color:var(--ink)}
+button:disabled{opacity:.45;cursor:default}
+button:focus-visible,input:focus-visible,select:focus-visible,tr:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+.bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin:10px 0 4px}
+.bar i{display:block;height:100%;background:var(--gold);width:0;transition:width .4s}
+.pill{display:inline-block;font-size:12px;padding:1px 8px;border-radius:99px;border:1px solid var(--line);color:var(--muted)}
+.pill.run{border-color:var(--gold);color:var(--gold)}
+.err{color:var(--warn);font-size:13px}
+.up{color:var(--up)}.down{color:var(--down)}.mut{color:var(--muted)}
+.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{border-collapse:collapse;width:100%;font-size:13px;white-space:nowrap}
+th,td{padding:6px 8px;text-align:right;border-bottom:1px solid var(--line)}
+th:first-child,td:first-child,th.l,td.l{text-align:left}
+th{color:var(--muted);font-weight:500;cursor:pointer;user-select:none}
+tbody tr{cursor:pointer}tbody tr:hover{background:var(--gold-soft)}
+.verdict{font-size:18px;line-height:1.45;margin:2px 0 6px}
+.verdict b{font-size:26px}
+.note{color:var(--muted);font-size:12.5px;margin:6px 0 0}
+.runs{display:flex;gap:6px;flex-wrap:wrap}
+.runs button{font-size:12.5px;padding:5px 10px}
+.runs button.cur{border-color:var(--gold);color:var(--gold)}
+canvas{width:100%;display:block}
+#login{position:fixed;inset:0;background:var(--bg);display:none;place-items:center;z-index:9}
+#login .panel{width:min(320px,90vw)}
+@media (prefers-reduced-motion:reduce){.bar i{transition:none}}
+</style>
+</head>
+<body>
+<div id="login"><div class="panel"><h2>籌碼峰實驗室</h2>
+  <label>密碼<input id="pw" type="password" autocomplete="current-password"></label>
+  <div class="row" style="margin-top:10px"><button class="act" id="loginBtn">登入</button><span class="err" id="loginErr"></span></div>
+</div></div>
+
+<div class="wrap">
+<header>
+  <h1><span aria-hidden="true"></span>籌碼峰實驗室</h1>
+  <div class="sub" id="headStat">讀取中…</div>
+</header>
+<nav role="tablist">
+  <button role="tab" data-t="data" aria-selected="true">資料</button>
+  <button role="tab" data-t="bt" aria-selected="false">回測</button>
+  <button role="tab" data-t="chip" aria-selected="false">籌碼圖</button>
+</nav>
+
+<!-- 資料 -->
+<section id="t-data" class="on">
+  <div class="panel"><h2>資料庫</h2><div class="grid" id="dataGrid"></div><div id="dataErr"></div></div>
+  <div class="panel"><h2>抓取日資料</h2>
+    <div class="row">
+      <label style="flex:1;min-width:140px">起始日<input type="date" id="fStart"></label>
+      <label style="flex:1;min-width:140px">結束日（空白＝到今天）<input type="date" id="fEnd"></label>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button class="act" id="fGo">開始抓取</button>
+      <button class="ghost" id="fStop">停止</button>
+      <button class="ghost" id="fShares">重抓股本</button>
+      <span class="pill" id="fPill">閒置</span>
+    </div>
+    <div class="bar"><i id="fBar"></i></div>
+    <div class="sub" id="fMsg"></div>
+    <p class="note">一天上市、上櫃各一個請求，間隔約 4 秒以免被證交所封鎖。三年約 1,500 個請求，需 1.5～2 小時；中斷後再按開始會從缺的日期續抓。</p>
+  </div>
+</section>
+
+<!-- 回測 -->
+<section id="t-bt">
+  <div class="panel"><h2>策略參數：低位單峰密集 → 帶量突破</h2>
+    <form id="pForm" onsubmit="return false">
+    <fieldset><legend>訊號</legend><div class="grid">
+      <label>90% 集中度上限<input name="conc_th" type="number" step="0.01"></label>
+      <label>主峰 ≤ 250 日高 ×<input name="low_pos" type="number" step="0.05"></label>
+      <label>突破的籌碼上緣<select name="edge"><option value="p95">95% 上緣</option><option value="p85">85% 上緣</option></select></label>
+      <label>量 ≥ 20 日均量 ×<input name="vol_mult" type="number" step="0.1"></label>
+      <label>衰減係數<input name="decay" type="number" step="0.1"></label>
+      <label>暖機天數<input name="warmup" type="number" step="10"></label>
+    </div></fieldset>
+    <fieldset><legend>出場</legend><div class="grid">
+      <label>最大停損<input name="max_stop" type="number" step="0.01"></label>
+      <label>移動停利回落<input name="trail" type="number" step="0.01"></label>
+      <label>最長持有（日）<input name="max_hold" type="number" step="5"></label>
+      <label>手續費折扣<input name="fee_discount" type="number" step="0.05"></label>
+    </div></fieldset>
+    <fieldset><legend>篩選與期間</legend><div class="grid">
+      <label>20 日均成交額 ≥<input name="min_value" type="number" step="5000000"></label>
+      <label>股價 ≥<input name="min_price" type="number" step="1"></label>
+      <label>回測起<input name="start" type="date"></label>
+      <label>回測迄<input name="end" type="date"></label>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <label><input type="checkbox" name="mk_TWSE" checked>上市</label>
+      <label><input type="checkbox" name="mk_TPEX" checked>上櫃</label>
+      <label><input type="checkbox" name="skip_limit_up" checked>開盤近漲停不進場</label>
+    </div></fieldset>
+    <div class="row"><button class="act" id="bGo">執行回測</button><button class="ghost" id="bReset">恢復預設</button><span class="pill" id="bPill">閒置</span></div>
+    <div class="bar"><i id="bBar"></i></div><div class="sub" id="bMsg"></div>
+    </form>
+  </div>
+  <div class="panel"><h2>回測紀錄</h2><div class="runs" id="runs"><span class="mut">還沒有回測紀錄。資料抓完後按「執行回測」。</span></div></div>
+  <div id="result"></div>
+</section>
+
+<!-- 籌碼圖 -->
+<section id="t-chip">
+  <div class="panel">
+    <div class="row">
+      <label style="flex:1;min-width:90px">代號<input id="cCode" inputmode="numeric" placeholder="2330"></label>
+      <label style="flex:1.4;min-width:140px">日期（空白＝最新）<input id="cDate" type="date"></label>
+      <label style="width:90px">衰減<input id="cDecay" type="number" step="0.1" value="1"></label>
+      <button class="act" id="cGo" style="align-self:flex-end">畫圖</button>
+    </div>
+  </div>
+  <div class="panel" id="chipBox" hidden>
+    <h2 id="cTitle"></h2>
+    <canvas id="cv" height="380" aria-label="K 線與籌碼分布圖"></canvas>
+    <div class="row sub" style="margin-top:6px;gap:14px">
+      <span><i style="display:inline-block;width:10px;height:10px;background:var(--gold);opacity:.8"></i> 獲利籌碼（成本在收盤以下）</span>
+      <span><i style="display:inline-block;width:10px;height:10px;background:var(--blue);opacity:.8"></i> 套牢籌碼</span>
+      <span>虛線：90% 籌碼上下緣</span>
+    </div>
+    <div class="grid" id="cStats" style="margin-top:12px"></div>
+    <p class="note" id="cNote"></p>
+  </div>
+</section>
+</div>
+
+<script>
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const api=async(p,o={})=>{const r=await fetch(p,{headers:{'Content-Type':'application/json'},...o});
+  const j=await r.json().catch(()=>({error:'回應格式錯誤'}));if(r.status===401){showLogin();throw new Error('需要登入')}
+  if(!r.ok)throw new Error(j.error||r.status);return j};
+const post=(p,b)=>api(p,{method:'POST',body:JSON.stringify(b||{})});
+const pct=(x,d=1)=>x==null||isNaN(x)?'—':(x>0?'+':'')+(x*100).toFixed(d)+'%';
+const cls=x=>x>0?'up':x<0?'down':'';
+const fmt=n=>n==null?'—':Number(n).toLocaleString('zh-TW');
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let DEF={}, curRun=null, poll=null, sortKey='entry_date', sortDir=1, tradeFilter='';
+
+function showLogin(){$('#login').style.display='grid';$('#pw').focus()}
+$('#loginBtn').onclick=async()=>{try{await post('/api/login',{password:$('#pw').value});$('#login').style.display='none';boot()}catch(e){$('#loginErr').textContent=e.message}};
+$('#pw').onkeydown=e=>{if(e.key==='Enter')$('#loginBtn').click()};
+
+$$('nav button').forEach(b=>b.onclick=()=>tab(b.dataset.t));
+function tab(t){$$('nav button').forEach(b=>b.setAttribute('aria-selected',b.dataset.t===t));
+  $$('section').forEach(s=>s.classList.toggle('on',s.id==='t-'+t));if(t==='chip'&&lastChip)drawChip(lastChip)}
+
+// ---------- 狀態 ----------
+async function refresh(){
+  let s;try{s=await api('/api/status')}catch(e){return}
+  const d=s.data,f=s.fetch,b=s.backtest;DEF=s.defaults;
+  $('#headStat').textContent=d.stocks?`${fmt(d.stocks)} 檔・${d.first} ～ ${d.last}`:'尚無資料';
+  $('#dataGrid').innerHTML=[
+    ['上市',fmt(d.by_market.TWSE||0)+' 檔'],['上櫃',fmt(d.by_market.TPEX||0)+' 檔'],
+    ['交易日',fmt(d.days)],['起',d.first||'—'],['迄',d.last||'—'],['有股本資料',fmt(d.shares)+' 檔'],
+    ['自動更新',s.auto_update?'開（平日 16:30）':'關']
+  ].map(([k,v])=>`<div class="kv"><small>${k}</small><b>${v}</b></div>`).join('');
+  $('#dataErr').innerHTML=d.errors.length?'<p class="err">抓取失敗的日期：'+d.errors.map(e=>`${e.date} ${e.market}（${esc(e.status)}）`).join('、')+'</p>':'';
+  job('#f',f);job('#b',b);
+  $('#fGo').disabled=f.running;$('#bGo').disabled=b.running;
+  if(b.run_id&&!b.running&&b.run_id!==curRun?.id&&!refresh.seen?.has(b.run_id)){(refresh.seen??=new Set).add(b.run_id);await loadRuns();openRun(b.run_id)}
+  clearTimeout(poll);poll=setTimeout(refresh,(f.running||b.running)?2000:15000);
+}
+function job(p,j){const pill=$(p+'Pill');pill.textContent=j.running?'進行中':(j.error?'有錯誤':'閒置');
+  pill.className='pill'+(j.running?' run':'');
+  $(p+'Bar').style.width=j.total?(100*j.done/j.total).toFixed(1)+'%':(j.running?'5%':'0');
+  $(p+'Msg').innerHTML=esc(j.msg)+(j.total?`（${fmt(j.done)} / ${fmt(j.total)}）`:'')+(j.error?`<div class="err">${esc(j.error)}</div>`:'')}
+
+// ---------- 資料 ----------
+const d3=new Date();d3.setFullYear(d3.getFullYear()-3);$('#fStart').value=d3.toISOString().slice(0,10);
+$('#fGo').onclick=async()=>{try{await post('/api/fetch',{start:$('#fStart').value,end:$('#fEnd').value||null});refresh()}catch(e){alert(e.message)}};
+$('#fStop').onclick=async()=>{await post('/api/fetch/stop');refresh()};
+$('#fShares').onclick=async()=>{$('#fShares').disabled=true;try{const r=await post('/api/shares');alert('股本：上市 '+r.TWSE+'、上櫃 '+r.TPEX);refresh()}catch(e){alert(e.message)}$('#fShares').disabled=false};
+
+// ---------- 參數 ----------
+function fillForm(p){const f=$('#pForm');for(const [k,v] of Object.entries(p)){
+  if(k==='markets'){f.mk_TWSE.checked=v.includes('TWSE');f.mk_TPEX.checked=v.includes('TPEX');continue}
+  const el=f.elements[k];if(!el)continue;if(el.type==='checkbox')el.checked=!!v;else el.value=v}}
+function readForm(){const f=$('#pForm'),p={};for(const k of Object.keys(DEF)){const el=f.elements[k];if(!el)continue;
+  p[k]=el.type==='checkbox'?el.checked:el.value}
+  p.markets=[f.mk_TWSE.checked&&'TWSE',f.mk_TPEX.checked&&'TPEX'].filter(Boolean);return p}
+$('#bReset').onclick=()=>fillForm(DEF);
+$('#bGo').onclick=async()=>{try{await post('/api/backtest',readForm());refresh()}catch(e){alert(e.message)}};
+
+// ---------- 回測結果 ----------
+async function loadRuns(){const rs=await api('/api/runs');if(!rs.length)return;
+  $('#runs').innerHTML=rs.map(r=>`<button class="ghost${curRun?.id===r.id?' cur':''}" data-id="${r.id}">#${r.id}・${r.created.slice(5,16).replace('T',' ')}・${r.summary.n??0} 筆・20日超額 ${pct(r.summary.excess20)}</button>`).join('');
+  $$('#runs button').forEach(b=>b.onclick=()=>openRun(+b.dataset.id))}
+async function openRun(id){curRun=await api('/api/runs/'+id);fillForm(curRun.params);
+  $$('#runs button').forEach(b=>b.classList.toggle('cur',+b.dataset.id===id));renderRun()}
+
+function renderRun(){const r=curRun,s=r.summary;
+  const e20=r.event.find(e=>e.h===20)||{};
+  const verdict=e20.n?`訊號後 20 日平均超額報酬 <b class="${cls(e20.excess)}">${pct(e20.excess,2)}</b>`+
+    `<br><span class="sub">${fmt(e20.n)} 個訊號・勝過同日大盤比例 ${pct(e20.hit,0).replace('+','')}・t 值 ${e20.t??'—'}`+
+    `${e20.t!=null?(Math.abs(e20.t)>=2?'（統計上顯著）':'（不顯著，可能是運氣）'):''}</span>`:'這組參數沒有產生任何訊號，試著放寬集中度或低位條件。';
+  const ev=`<table><thead><tr><th class="l">持有</th><th>訊號數</th><th>訊號報酬</th><th>同日大盤</th><th>超額</th><th>勝出率</th><th>t 值</th></tr></thead><tbody>`+
+    r.event.map(e=>`<tr tabindex="-1"><td class="l">${e.h} 日</td><td>${fmt(e.n)}</td><td class="${cls(e.sig)}">${pct(e.sig,2)}</td><td class="${cls(e.base)}">${pct(e.base,2)}</td><td class="${cls(e.excess)}">${pct(e.excess,2)}</td><td>${e.hit!=null?(e.hit*100).toFixed(0)+'%':'—'}</td><td>${e.t??'—'}</td></tr>`).join('')+'</tbody></table>';
+  const kv=[['已平倉交易',fmt(s.n)],['勝率',s.win!=null?(s.win*100).toFixed(1)+'%':'—'],['平均報酬',pct(s.avg,2),cls(s.avg)],
+    ['中位數',pct(s.median,2),cls(s.median)],['平均獲利',pct(s.avg_win,1),'up'],['平均虧損',pct(s.avg_loss,1),'down'],
+    ['獲利因子',s.pf??'—'],['平均持有',s.days!=null?s.days+' 日':'—'],['持有中',fmt(s.open)],['開盤漲停跳過',fmt(s.skipped)]]
+    .map(([k,v,c])=>`<div class="kv"><small>${k}</small><b class="${c||''}">${v}</b></div>`).join('');
+  const yr=`<table><thead><tr><th class="l">年度</th><th>筆數</th><th>勝率</th><th>平均</th><th>中位數</th><th>獲利因子</th></tr></thead><tbody>`+
+    r.years.map(y=>`<tr tabindex="-1"><td class="l">${y.year}</td><td>${fmt(y.n)}</td><td>${y.win!=null?(y.win*100).toFixed(0)+'%':'—'}</td><td class="${cls(y.avg)}">${pct(y.avg,2)}</td><td class="${cls(y.median)}">${pct(y.median,2)}</td><td>${y.pf??'—'}</td></tr>`).join('')+'</tbody></table>';
+  const rs=r.reasons.map(x=>`${x.reason} ${fmt(x.n)} 筆（平均 <span class="${cls(x.avg)}">${pct(x.avg,1)}</span>）`).join('・');
+  const latest=r.latest.length?`<table><thead><tr><th class="l">代號</th><th class="l">名稱</th><th>收盤</th><th>籌碼上緣</th><th>集中度</th><th>量比</th></tr></thead><tbody>`+
+    r.latest.map(t=>`<tr data-code="${t.code}" data-date="${t.date}" tabindex="0"><td class="l">${t.code}</td><td class="l">${esc(t.name)}</td><td>${t.close}</td><td>${t.edge}</td><td>${(t.conc90*100).toFixed(1)}%</td><td>${t.vol_x}×</td></tr>`).join('')+'</tbody></table>'
+    :`<p class="mut">${r.last_date||''} 沒有新訊號。</p>`;
+  $('#result').innerHTML=`
+  <div class="panel"><p class="verdict">${verdict}</p>
+    <p class="note">期間 ${s.range[0]} ～ ${s.range[1]}・掃描 ${fmt(s.stocks)} 檔${s.turn_est?`・其中 ${s.turn_est} 檔無股本資料，換手率用估計值`:''}。「同日大盤」是同一天所有符合流動性條件股票的平均報酬，超額報酬才代表訊號本身的價值。</p></div>
+  <div class="panel"><h2>事件研究</h2><div class="scroll">${ev}</div></div>
+  <div class="panel"><h2>交易統計（含手續費、證交稅）</h2><div class="grid">${kv}</div><p class="note">出場原因：${rs||'—'}</p></div>
+  <div class="panel"><h2>逐年</h2><div class="scroll">${yr}</div></div>
+  <div class="panel"><h2>最新訊號（${r.last_date||'—'} 收盤）</h2><div class="scroll">${latest}</div></div>
+  <div class="panel"><h2>交易明細</h2><div class="row" style="margin-bottom:8px"><input id="tFilter" placeholder="篩選代號或名稱" style="max-width:220px" value="${esc(tradeFilter)}"><span class="sub" id="tCount"></span></div>
+    <div class="scroll" id="tTable"></div><div class="row" style="margin-top:8px"><button class="ghost" id="tMore" hidden>顯示更多</button><button class="ghost" id="tDel">刪除這次回測</button></div></div>`;
+  $('#tFilter').oninput=e=>{tradeFilter=e.target.value;tLimit=200;renderTrades()};
+  $('#tMore').onclick=()=>{tLimit+=300;renderTrades()};
+  $('#tDel').onclick=async()=>{if(!confirm('刪除回測 #'+r.id+'？'))return;await post(`/api/runs/${r.id}/delete`);curRun=null;$('#result').innerHTML='';$('#runs').innerHTML='';loadRuns()};
+  bindRows($('#result'));renderTrades()}
+let tLimit=200;
+const COLS=[['date','訊號日','l'],['code','代號','l'],['name','名稱','l'],['entry','進場'],['exit','出場'],['ret','報酬'],['days','天數'],['reason','原因','l'],['conc90','集中度'],['vol_x','量比']];
+function renderTrades(){let t=curRun.trades;const q=tradeFilter.trim();
+  if(q)t=t.filter(x=>x.code.includes(q)||x.name.includes(q));
+  t=[...t].sort((a,b)=>(a[sortKey]>b[sortKey]?1:a[sortKey]<b[sortKey]?-1:0)*sortDir);
+  $('#tCount').textContent=`${fmt(t.length)} 筆`;
+  $('#tTable').innerHTML=`<table><thead><tr>${COLS.map(([k,n,c])=>`<th class="${c||''}" data-k="${k}">${n}${sortKey===k?(sortDir>0?' ▲':' ▼'):''}</th>`).join('')}</tr></thead><tbody>`+
+    t.slice(0,tLimit).map(x=>`<tr data-code="${x.code}" data-date="${x.date}" tabindex="0"><td class="l">${x.date}</td><td class="l">${x.code}</td><td class="l">${esc(x.name)}</td><td>${x.entry}</td><td>${x.exit}</td><td class="${cls(x.ret)}">${pct(x.ret,1)}</td><td>${x.days}</td><td class="l${x.open?' mut':''}">${x.reason}</td><td>${(x.conc90*100).toFixed(1)}%</td><td>${x.vol_x}×</td></tr>`).join('')+'</tbody></table>';
+  $('#tMore').hidden=t.length<=tLimit;
+  $$('#tTable th').forEach(th=>th.onclick=()=>{const k=th.dataset.k;sortDir=sortKey===k?-sortDir:(k==='ret'?-1:1);sortKey=k;renderTrades()});
+  bindRows($('#tTable'))}
+function bindRows(root){root.querySelectorAll('tr[data-code]').forEach(tr=>{const go=()=>{$('#cCode').value=tr.dataset.code;$('#cDate').value=tr.dataset.date;tab('chip');loadChip()};
+  tr.onclick=go;tr.onkeydown=e=>{if(e.key==='Enter')go()}})}
+
+// ---------- 籌碼圖 ----------
+let lastChip=null;
+$('#cGo').onclick=loadChip;$('#cCode').onkeydown=e=>{if(e.key==='Enter')loadChip()};
+async function loadChip(){const code=$('#cCode').value.trim();if(!code)return;
+  try{const v=await api(`/api/chips?code=${encodeURIComponent(code)}&date=${$('#cDate').value}&decay=${$('#cDecay').value||1}`);
+    lastChip=v;$('#chipBox').hidden=false;
+    $('#cTitle').textContent=`${v.code} ${v.name}・${v.date}`;
+    const m=v.m;
+    $('#cStats').innerHTML=[['收盤（還原）',v.bars.c.at(-1)],['主峰',m.poc],['90% 區間',`${m.p5} ～ ${m.p95}`],['90% 集中度',(m.conc90*100).toFixed(1)+'%'],
+      ['70% 集中度',(m.conc70*100).toFixed(1)+'%'],['獲利比例',(m.profit*100).toFixed(1)+'%']].map(([k,x])=>`<div class="kv"><small>${k}</small><b>${x}</b></div>`).join('');
+    $('#cNote').textContent=(v.turn_est?'這檔沒有股本資料，換手率是估計值。':'')+
+      (v.events.length?'價格已還原，除權息／減資日：'+v.events.map(e=>`${e[0]}（×${e[1]}）`).join('、'):'價格為還原價。');
+    drawChip(v)}catch(e){alert(e.message)}}
+function drawChip(v){const cv=$('#cv'),css=getComputedStyle(document.documentElement),col=n=>css.getPropertyValue(n).trim();
+  const W=cv.clientWidth||600,H=380,dpr=devicePixelRatio||1;cv.width=W*dpr;cv.height=H*dpr;cv.style.height=H+'px';
+  const g=cv.getContext('2d');g.setTransform(dpr,0,0,dpr,0,0);g.clearRect(0,0,W,H);
+  const b=v.bars,n=b.c.length,axisW=46,histW=Math.max(70,W*0.28),cw=W-histW-axisW-8,top=10,bot=H-22;
+  let lo=Math.min(...b.l),hi=Math.max(...b.h);const gl=v.grid[0],gh=v.grid.at(-1);lo=Math.min(lo,gl);hi=Math.max(hi,gh);
+  const pad=(hi-lo)*0.03;lo-=pad;hi+=pad;const y=p=>bot-(p-lo)/(hi-lo)*(bot-top);
+  g.font='11px system-ui';g.fillStyle=col('--muted');g.strokeStyle=col('--line');g.lineWidth=1;
+  for(let k=0;k<=5;k++){const p=lo+(hi-lo)*k/5,yy=y(p);g.beginPath();g.moveTo(0,yy);g.lineTo(cw+histW+8,yy);g.stroke();g.fillText(p.toFixed(p<100?2:0),cw+histW+12,yy+4)}
+  const step=cw/n,bw=Math.max(1,step*0.65);
+  for(let i=0;i<n;i++){const up=b.c[i]>=b.o[i],x=i*step+step/2;g.strokeStyle=g.fillStyle=col(up?'--up':'--down');
+    g.beginPath();g.moveTo(x,y(b.h[i]));g.lineTo(x,y(b.l[i]));g.stroke();
+    const y1=y(Math.max(b.o[i],b.c[i])),y2=y(Math.min(b.o[i],b.c[i]));g.fillRect(x-bw/2,y1,bw,Math.max(1,y2-y1))}
+  const close=b.c.at(-1),mx=Math.max(...v.dist),x0=cw+8;
+  for(let i=0;i<v.grid.length;i++){const p=v.grid[i],nx=v.grid[i+1]??p*1.01,y1=y(nx),y2=y(p),len=v.dist[i]/mx*(histW-6);
+    g.fillStyle=col(p<=close?'--gold':'--blue');g.globalAlpha=.85;g.fillRect(x0,Math.min(y1,y2),len,Math.max(1,Math.abs(y2-y1)-0.4))}
+  g.globalAlpha=1;
+  const hl=(p,c,dash,lab)=>{g.strokeStyle=c;g.setLineDash(dash);g.beginPath();g.moveTo(0,y(p));g.lineTo(cw+histW+8,y(p));g.stroke();g.setLineDash([]);
+    if(lab){g.fillStyle=c;g.fillText(lab,4,y(p)-3)}};
+  hl(v.m.p95,col('--muted'),[4,4],'上緣 '+v.m.p95);hl(v.m.p5,col('--muted'),[4,4],'下緣 '+v.m.p5);hl(v.m.poc,col('--gold'),[],'');
+  g.fillStyle=col('--muted');g.fillText(b.d[0],0,H-6);const ld=b.d.at(-1);g.fillText(ld,cw-g.measureText(ld).width,H-6)}
+addEventListener('resize',()=>{if(lastChip&&$('#t-chip').classList.contains('on'))drawChip(lastChip)});
+
+async function boot(){await refresh();if(Object.keys(DEF).length&&!curRun)fillForm(DEF);
+  const rs=await api('/api/runs').catch(()=>[]);if(rs.length&&!curRun){await loadRuns();openRun(rs[0].id)}}
+(async()=>{try{const a=await api('/api/auth');if(a.need&&!a.ok)return showLogin();boot()}catch(e){}})();
+</script>
+</body>
+</html>
