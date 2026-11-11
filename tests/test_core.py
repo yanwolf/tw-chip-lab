@@ -142,4 +142,10 @@ try:
 except ValueError:
     bad = True
 check(bad, "填了掃描值但沒選參數 → 直接報錯，不會默默跑一般回測")
+job2 = backtest.BacktestJob()
+n0 = len(db.list_runs())
+job2._run(backtest.norm_params({"min_value": 1e6, "sweep_key": "max_hold", "sweep": "40,90"}))
+rs = db.list_runs()[:2]
+check(len(db.list_runs()) == n0 + 2 and {x["params"]["max_hold"] for x in rs} == {40, 90}
+      and all(isinstance(x["params"]["max_hold"], int) for x in rs), "掃描最長持有（整數參數）")
 print(f"\n全部通過：{ok} 項")

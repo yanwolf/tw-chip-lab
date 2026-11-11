@@ -48,7 +48,8 @@ DEFAULTS = {
     "sweep_key": "",         # 敏感度掃描：要掃的參數
     "sweep": "",             # 逗號分隔的值，例如 0.10,0.15,0.20
 }
-SWEEP_KEYS = ("conc_th", "vol_mult", "low_pos", "max_mcap", "box_bars", "trail")
+SWEEP_KEYS = ("conc_th", "vol_mult", "low_pos", "max_mcap", "min_mcap", "box_bars", "trail",
+              "max_hold", "max_stop")
 HORIZONS = (5, 10, 20, 60)
 # 分層：20 日均成交額、市值（原始收盤 × 目前股本）
 TIERS = {
