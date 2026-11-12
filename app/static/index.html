@@ -101,10 +101,12 @@ canvas{width:100%;display:block}
       <button class="act" id="fGo">開始抓取</button>
       <button class="ghost" id="fStop">停止</button>
       <button class="ghost" id="fShares">重抓股本</button>
+      <button class="ghost" id="fAdj">抓除權息／減資</button>
       <span class="pill" id="fPill">閒置</span>
     </div>
     <div class="bar"><i id="fBar"></i></div>
     <div class="sub" id="fMsg"></div>
+    <div class="row" style="margin-top:10px"><button class="ghost" id="fResetTpex" style="color:var(--warn);border-color:var(--warn)">清除上櫃資料</button><span class="sub">上櫃資料有問題時用，清除後要重新抓取</span></div>
     <p class="note">一天上市、上櫃各一個請求，間隔約 4 秒以免被證交所封鎖。三年約 1,500 個請求，需 1.5～2 小時；中斷後再按開始會從缺的日期續抓。</p>
   </div>
   <div class="panel"><h2>資料檢查</h2>
@@ -219,7 +221,8 @@ async function refresh(){
   $('#dataGrid').innerHTML=[
     ['上市',fmt(d.by_market.TWSE||0)+' 檔'],['上櫃',fmt(d.by_market.TPEX||0)+' 檔'],
     ['交易日',fmt(d.days)],['起',d.first||'—'],['迄',d.last||'—'],['有股本資料',fmt(d.shares)+' 檔'],
-    ['自動更新',s.auto_update?'開（平日 16:30）':'關']
+    ['自動更新',s.auto_update?'開（平日 16:30）':'關'],
+    ['除權息／減資',d.adj&&d.adj.length?d.adj.map(a=>`${{TWSE_EX:'上市除權息',TWSE_CR:'上市減資',TPEX_EX:'上櫃除權息',TPEX_CR:'上櫃減資'}[a.source]||a.source} ${fmt(a.n)}`).join('<br>'):'尚未抓取']
   ].map(([k,v])=>`<div class="kv"><small>${k}</small><b>${v}</b></div>`).join('');
   $('#dataErr').innerHTML=d.errors.length?'<p class="err">抓取失敗的日期：'+d.errors.map(e=>`${e.date} ${e.market}（${esc(e.status)}）`).join('、')+'</p>':'';
   job('#f',f);job('#b',b);
@@ -235,6 +238,9 @@ function job(p,j){const pill=$(p+'Pill');pill.textContent=j.running?'進行中':
 // ---------- 資料 ----------
 const d3=new Date();d3.setFullYear(d3.getFullYear()-3);$('#fStart').value=d3.toISOString().slice(0,10);
 $('#fGo').onclick=async()=>{try{await post('/api/fetch',{start:$('#fStart').value,end:$('#fEnd').value||null});refresh()}catch(e){alert(e.message)}};
+$('#fAdj').onclick=async()=>{try{await post('/api/adj');refresh()}catch(e){alert(e.message)}};
+$('#fResetTpex').onclick=async()=>{if(!confirm('確定清除所有上櫃日資料？清除後要再按「開始抓取」重抓（約 2～3 小時）。'))return;
+  try{await post('/api/reset_tpex');alert('已清除上櫃資料');refresh()}catch(e){alert(e.message)}};
 $('#fStop').onclick=async()=>{await post('/api/fetch/stop');refresh()};
 $('#fShares').onclick=async()=>{$('#fShares').disabled=true;try{const r=await post('/api/shares');alert('股本：上市 '+r.TWSE+'、上櫃 '+r.TPEX);refresh()}catch(e){alert(e.message)}$('#fShares').disabled=false};
 
@@ -250,12 +256,12 @@ async function pollDiag(){let g;try{g=await api('/api/diag')}catch(e){return}
 function renderDiag(g){
     const ev=`<table><thead><tr><th class="l">市場</th><th>檔數</th><th>每檔每年還原事件</th><th>事件總數</th><th>向下調整比例</th></tr></thead><tbody>`+
       g.events.map(e=>`<tr tabindex="-1"><td class="l">${e.market==='TWSE'?'上市':'上櫃'}</td><td>${fmt(e.stocks)}</td><td>${e.per_year}</td><td>${fmt(e.events)}</td><td>${e.down_share!=null?(e.down_share*100).toFixed(0)+'%':'—'}</td></tr>`).join('')+'</tbody></table>';
-    const yr=`<table><thead><tr><th class="l">市場</th><th class="l">成交額</th><th class="l">年度</th><th>等權報酬</th><th>平均日報酬</th><th>上漲比例</th><th>單日 >11%</th></tr></thead><tbody>`+
-      g.years.map(y=>`<tr tabindex="-1"><td class="l">${y.market==='TWSE'?'上市':'上櫃'}</td><td class="l">${y.liq==='liquid'?'≥ 2千萬':'< 2千萬'}</td><td class="l">${y.year}</td><td class="${cls(y.ew)}">${pct(y.ew,1)}</td><td>${(y.mean*100).toFixed(3)}%</td><td>${(y.up*100).toFixed(1)}%</td><td>${fmt(y.big)}</td></tr>`).join('')+'</tbody></table>';
+    const yr=`<table><thead><tr><th class="l">市場</th><th class="l">成交額</th><th class="l">年度</th><th>等權報酬</th><th>平均日報酬</th><th>上漲比例</th><th>單日 >11%</th><th>與前日相同</th></tr></thead><tbody>`+
+      g.years.map(y=>`<tr tabindex="-1"><td class="l">${y.market==='TWSE'?'上市':'上櫃'}</td><td class="l">${y.liq==='liquid'?'≥ 2千萬':'< 2千萬'}</td><td class="l">${y.year}</td><td class="${cls(y.ew)}">${pct(y.ew,1)}</td><td>${(y.mean*100).toFixed(3)}%</td><td>${(y.up*100).toFixed(1)}%</td><td>${fmt(y.big)}</td><td>${y.stale!=null?(y.stale*100).toFixed(1)+'%':'—'}</td></tr>`).join('')+'</tbody></table>';
     const ex=`<table><thead><tr><th class="l">代號</th><th class="l">名稱</th><th class="l">市場</th><th class="l">日期</th><th>前收</th><th>收盤</th><th>還原報酬</th><th>原始報酬</th></tr></thead><tbody>`+
       g.extremes.map(x=>`<tr data-code="${x.code}" data-date="${x.date}" tabindex="0"><td class="l">${x.code}</td><td class="l">${esc(x.name)}</td><td class="l">${x.market==='TWSE'?'上市':'上櫃'}</td><td class="l">${x.date}</td><td>${x.prev_raw}</td><td>${x.raw}</td><td>${pct(x.adj_ret,1)}</td><td>${pct(x.raw_ret,1)}</td></tr>`).join('')+'</tbody></table>';
     $('#diag').innerHTML=`<h2 style="margin-top:12px">還原事件</h2><div class="scroll">${ev}</div><p class="note">正常約每檔每年 1～2 次（除息、除權、減資）。明顯偏高代表漲跌方向解析有誤。</p>
-      <h2 style="margin-top:12px">逐年統計</h2><div class="scroll">${yr}</div><p class="note">台股等權報酬一般在 ±50% 以內；上漲比例通常在 40～50%。</p>
+      <h2 style="margin-top:12px">逐年統計</h2><div class="scroll">${yr}</div><p class="note">台股等權報酬一般在 ±50% 以內；上漲比例通常在 40～50%；「與前日相同」（收盤和成交量都一樣）正常應接近 0%。</p>
       <h2 style="margin-top:12px">最極端的日報酬</h2><div class="scroll">${ex}</div><p class="note">台股漲跌幅限制 10%，超過的通常是除權息、減資、新上市或資料錯誤；點一列可看籌碼圖。</p>`;
     bindRows($('#diag'))}
 

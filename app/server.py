@@ -116,6 +116,14 @@ class H(BaseHTTPRequestHandler):
             if u.path == "/api/diag":
                 ok = diag.JOB.start()
                 return self._send(200 if ok else 409, {"ok": ok} if ok else {"error": "檢查已在進行中"})
+            if u.path == "/api/adj":
+                ok = fetch.JOB.start_adj()
+                return self._send(200 if ok else 409, {"ok": ok} if ok else {"error": "抓取正在進行中"})
+            if u.path == "/api/reset_tpex":
+                if fetch.JOB.running() or backtest.JOB.running():
+                    return self._send(409, {"error": "抓取或回測進行中，請等結束再清除"})
+                db.reset_market("TPEX")
+                return self._send(200, {"ok": True})
             if u.path == "/api/shares":
                 return self._send(200, fetch.fetch_shares())
             if u.path == "/api/backtest":

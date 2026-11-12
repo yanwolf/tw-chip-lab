@@ -50,12 +50,14 @@ def run(min_value=20_000_000, st=None):
         idx = np.array([di[d] for d in s.dates[1:]])
         liq = val20[:-1] >= min_value
         x = np.clip(r, -0.5, 0.5)
+        stale = (s.craw[1:] == s.craw[:-1]) & (s.v[1:] == s.v[:-1])
         for name_, m in (("liquid", liq), ("thin", ~liq)):
-            g = grp.setdefault((mkt, name_), {a: np.zeros(nd) for a in ("sum", "n", "pos", "big")})
+            g = grp.setdefault((mkt, name_), {a: np.zeros(nd) for a in ("sum", "n", "pos", "big", "stale")})
             np.add.at(g["sum"], idx[m], x[m])
             np.add.at(g["n"], idx[m], 1)
             np.add.at(g["pos"], idx[m], (r[m] > 0).astype(float))
             np.add.at(g["big"], idx[m], (np.abs(r[m]) > 0.11).astype(float))
+            np.add.at(g["stale"], idx[m], stale[m].astype(float))
         for i in np.argsort(-np.abs(r))[:3]:
             item = (abs(float(r[i])), code, s.name, mkt, s.dates[i + 1], round(float(s.craw[i]), 2),
                     round(float(s.craw[i + 1]), 2), round(float(r[i]), 4), round(float(rr[i]), 4))
@@ -78,6 +80,7 @@ def run(min_value=20_000_000, st=None):
                           "mean": round(float(g["sum"][m].sum() / n), 5),
                           "up": round(float(g["pos"][m].sum() / n), 3),
                           "big": int(g["big"][m].sum()),
+                          "stale": round(float(g["stale"][m].sum() / n), 3),
                           "ew": round(float(np.prod(1 + dm) - 1), 4)})
     events = [{"market": m, "stocks": v["stocks"],
                "per_year": round(v["events"] / v["years"], 2) if v["years"] else None,

@@ -45,6 +45,28 @@ r = fetch.parse_tpex(tpex_old)
 check(r[0]["open"] == 495 and r[0]["change"] == 5, "櫃買舊版格式")
 check(fetch.parse_tpex({"tables": [{"fields": ["代號", "收盤"], "data": []}]}) is None, "櫃買：空表＝休市")
 
+tw_d = dict(twse, date="20240102")
+check(fetch.check_date(tw_d, date(2024, 1, 2), "x") is None, "日期驗證：相符")
+try:
+    fetch.check_date(tw_d, date(2024, 1, 3), "x"); bad = False
+except ValueError:
+    bad = True
+check(bad, "日期驗證：回傳日期不符 → 報錯")
+try:
+    fetch.check_date({"tables": [{"date": "113/11/20", "fields": [], "data": []}]}, date(2024, 11, 21), "x"); bad = False
+except ValueError:
+    bad = True
+check(bad, "日期驗證：民國日期也能比對")
+ex_new = {"stat": "ok", "tables": [{"fields": ["除權息日期", "代號", "名稱", "除權息前收盤價", "除權息參考價", "權值"],
+          "data": [["113/07/15", "6488", "環球晶", "500.00", "490.00", "0"], ["113/07/15", "00679B", "ETF", "30", "29", "0"]]}]}
+check(fetch.parse_adj(ex_new, "TPEX_EX") == [("6488", "2024-07-15", 0.98)], "除權息表：新版格式、排除 ETF")
+ex_tw = {"stat": "OK", "fields": ["資料日期", "股票代號", "股票名稱", "除權息前收盤價", "除權息參考價"],
+         "data": [["113年09月12日", "2330", "台積電", "950.00", "946.00"]]}
+check(fetch.parse_adj(ex_tw, "TWSE_EX") == [("2330", "2024-09-12", round(946 / 950, 6))], "除權息表：證交所格式")
+ex_old = {"aaData": [["113/07/15", "6488", "環球晶", "500.00", "490.00"]]}
+check(fetch.parse_adj(ex_old, "TPEX_EX") == [("6488", "2024-07-15", 0.98)], "除權息表：櫃買舊版 aaData")
+check(fetch.parse_adj({"foo": 1}, "TWSE_EX") is None, "除權息表：認不出格式 → None（改試下一個網址）")
+
 print("合成資料")
 db.init()
 rng = np.random.default_rng(7)
@@ -94,6 +116,8 @@ for i, ds in enumerate(days):
     db.save_day(rowsd, ds, "TWSE", "ok")
 db.save_shares([("1111", 2e7), ("2222", 1e8)], "TWSE")
 
+prev299 = series["3333"][299][4]
+db.save_adj([("3333", days[300], round((prev299 - 2) / prev299, 6))], "TWSE_EX")
 s = chips.load("3333", None)
 check(len(s.events) == 1 and s.events[0][0] == days[300], "還原：抓到除息日")
 check(abs(s.c[299] - (series["3333"][299][4] - 2)) < 0.05, "還原：除息前價格已向下調整")
@@ -187,11 +211,28 @@ for i in range(1, 60):
                   "volume": 1e6, "value": 1e7, "change": abs(chg)}], days[i], "TPEX", "ok")
 s4 = chips.load("4444", None)
 check(len(s4.events) == 0 and abs(s4.c[-1] - pxs[-1]) < 1e-6, "漲跌少負號 → 不誤判成除權息、價格不被扭曲")
+# 減資：不比價且開盤跳空超過漲跌停 → 自動還原
+rows5 = []
+for i in range(80):
+    px = 10.0 if i < 50 else 40.0
+    rows5.append((days[i], px, i == 50))
+for d5, px, xday in rows5:
+    db.save_day([{"code": "5555", "name": "減資", "open": px, "high": px, "low": px, "close": px,
+                  "volume": 1e6, "value": 1e7, "change": None if xday else 0.0}], d5, "TWSE", "ok")
+s5 = chips.load("5555", None)
+check(len(s5.events) == 1 and abs(s5.c[49] - 40) < 1e-6, "減資跳空（不比價日）自動還原，價格連續")
+# 櫃買快照偵測
+snap = [{"code": f"{6000 + i}", "name": "x", "open": 10, "high": 10, "low": 10, "close": 10 + i * 0.1,
+         "volume": 1000 + i, "value": 1, "change": 0} for i in range(60)]
+db.save_day(snap, "2030-01-02", "TPEX", "ok")
+check(fetch._same_as_last(snap, "TPEX", date(2030, 1, 3)), "櫃買：跟前一天一模一樣 → 判定為快照")
+snap2 = [dict(r, close=r["close"] + 0.05) for r in snap]
+check(not fetch._same_as_last(snap2, "TPEX", date(2030, 1, 3)), "櫃買：正常變動 → 不誤判")
 from app import diag
 dg = diag.run(min_value=1e6)
 check(dg["events"] and dg["years"] and len(dg["extremes"]) > 0, "資料檢查有輸出")
 ev3 = {e["market"]: e for e in dg["events"]}["TWSE"]
-check(ev3["events"] == 1, "資料檢查：合成資料只有 1 個除權息事件")
+check(ev3["events"] == 2, "資料檢查：合成資料 2 個還原事件（除息＋減資）")
 diag.DiagJob()._run()
 lr = diag.last_result()
 check(lr and lr["created"] and lr["events"], "資料檢查在背景跑完並存檔")

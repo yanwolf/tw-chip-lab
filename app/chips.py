@@ -6,9 +6,12 @@
 這就是通達信 CYQ 的做法；它是「推估」，不是真實持股資料。
 
 價格先做「還原」（向前調整除權息、減資）：
-證交所與櫃買的漲跌是相對「參考價」計算，所以 參考價 = 收盤 − 漲跌；
-參考價 ≠ 前一交易日收盤 的那天就是除權息／減資日，調整因子 = 參考價 ÷ 前收。
+因子 = 官方參考價 ÷ 前收盤（證交所 TWT49U／TWTAUU、櫃買除權息與減資計算結果表）。
+交易所日行情在除權息日的漲跌是「X、0.00」，不能拿來推算參考價；
+官方表沒抓到、但當天不比價且開盤跳空超過漲跌停的（減資、面額變更），用開盤價當參考價。
 """
+import bisect
+
 import numpy as np
 
 from . import db
@@ -35,19 +38,25 @@ def load(code, shares=None, con=None):
 
     factor = np.ones(n)          # factor[i]：第 i 天（含）之前價格要乘的因子
     events = []
+    dates = [r[0] for r in rows]
+    # 1) 官方除權息、減資參考價（adj_events 表）
+    official = {}
+    for d, f in db.adj_for(code, con):
+        official[d] = official.get(d, 1.0) * f
+    for d, f in sorted(official.items()):
+        i = bisect.bisect_left(dates, d)          # 除權息日沒成交就套到下一個有成交的日子
+        if 0 < i < n and 0.05 < f < 20 and abs(f - 1) > 0.0005:
+            factor[:i] *= f
+            events.append((dates[i], round(f, 4)))
+    covered = {e[0] for e in events}
+    # 2) 不比價（漲跌為 X）且開盤跳空超過漲跌停：減資、面額變更等官方表沒抓到的，用開盤當參考價
     for i in range(1, n):
-        if chg[i] is None:
-            continue
-        ref = raw[i, 3] - chg[i]
-        prev = raw[i - 1, 3]
-        # 漲跌少了負號（下跌日只給絕對值）時：收盤＋漲跌＝前收，其實沒有除權息
-        if abs(raw[i, 3] + chg[i] - prev) < 1e-6 + prev * 1e-4 and abs(chg[i]) > 0:
-            continue
-        if ref > 0 and prev > 0:
-            f = ref / prev
-            if abs(f - 1) > 0.002 and 0.05 < f < 20:
-                factor[:i] *= f
-                events.append((rows[i][0], round(f, 4)))
+        if chg[i] is None and dates[i] not in covered:
+            g = raw[i, 0] / raw[i - 1, 3]
+            if g > 1.105 or g < 0.895:
+                factor[:i] *= g
+                events.append((dates[i], round(g, 4)))
+    events.sort()
 
     s = Series()
     s.code = code

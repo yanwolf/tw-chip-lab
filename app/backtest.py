@@ -167,7 +167,7 @@ def run_stock(s, p, date_index, breadth=None, paths=None):
     if need_cap and mcap is None:
         return [], [], [], [np.full(n, np.nan) for _ in HORIZONS], tiers, np.zeros(n, bool)  # 無股本
     for i in range(max(p["warmup"], 20), n):
-        eligible[i] = (val20[i] >= p["min_value"]) and (c[i] >= p["min_price"]) \
+        eligible[i] = (val20[i] >= p["min_value"]) and (s.craw[i] >= p["min_price"]) \
             and (p["max_value"] <= 0 or val20[i] <= p["max_value"]) \
             and start <= dates[i] <= end \
             and (p["max_mcap"] <= 0 or mcap[i] <= p["max_mcap"]) \

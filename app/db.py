@@ -24,6 +24,10 @@ CREATE TABLE IF NOT EXISTS fetch_log (
 CREATE TABLE IF NOT EXISTS shares (
   code TEXT PRIMARY KEY, shares REAL, market TEXT, updated TEXT
 );
+CREATE TABLE IF NOT EXISTS adj_events (
+  code TEXT, date TEXT, factor REAL, source TEXT,
+  PRIMARY KEY (code, date, source)
+);
 CREATE TABLE IF NOT EXISTS runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   created TEXT, params TEXT, summary TEXT, result TEXT
@@ -62,6 +66,49 @@ def save_day(rows, date, market, status):
         con.execute("INSERT OR REPLACE INTO fetch_log VALUES (?,?,?,?,?)",
                     (date, market, status, len(rows), now()))
         con.commit()
+        con.close()
+
+
+def log_fetch(date, market, status, n):
+    with _lock:
+        con = connect()
+        con.execute("INSERT OR REPLACE INTO fetch_log VALUES (?,?,?,?,?)", (date, market, status, n, now()))
+        con.commit()
+        con.close()
+
+
+def save_adj(items, source):
+    with _lock:
+        con = connect()
+        con.executemany("INSERT OR REPLACE INTO adj_events VALUES (?,?,?,?)",
+                        [(c, d, f, source) for c, d, f in items])
+        con.commit()
+        con.close()
+
+
+def adj_for(code, con=None):
+    own = con is None
+    con = con or connect()
+    rows = con.execute("SELECT date, factor FROM adj_events WHERE code=? ORDER BY date", (code,)).fetchall()
+    if own:
+        con.close()
+    return rows
+
+
+def adj_stats():
+    con = connect()
+    rows = con.execute("SELECT source, COUNT(*), MIN(date), MAX(date) FROM adj_events GROUP BY source").fetchall()
+    con.close()
+    return [{"source": a, "n": b, "first": c, "last": d} for a, b, c, d in rows]
+
+
+def reset_market(market):
+    with _lock:
+        con = connect()
+        con.execute("DELETE FROM daily WHERE market=?", (market,))
+        con.execute("DELETE FROM fetch_log WHERE market=?", (market,))
+        con.commit()
+        con.execute("VACUUM")
         con.close()
 
 
@@ -117,11 +164,12 @@ def stats():
     ns = con.execute("SELECT COUNT(*) FROM shares").fetchone()[0]
     errs = con.execute(
         "SELECT date, market, status FROM fetch_log WHERE status LIKE 'error%' "
-        "ORDER BY date DESC LIMIT 5").fetchall()
+        "ORDER BY ts DESC LIMIT 8").fetchall()
     con.close()
     return {"stocks": r[0], "first": r[1], "last": r[2], "days": r[3],
             "by_market": by_mkt, "shares": ns,
-            "errors": [{"date": d, "market": m, "status": s} for d, m, s in errs]}
+            "errors": [{"date": d, "market": m, "status": s} for d, m, s in errs],
+            "adj": adj_stats()}
 
 
 def save_run(params, summary, result):

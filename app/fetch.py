@@ -25,6 +25,7 @@ UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) tw-chip-lab",
 TWSE_URL = ("https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX"
             "?date={d:%Y%m%d}&type=ALLBUT0999&response=json")
 TPEX_URLS = [
+    "https://www.tpex.org.tw/www/zh-tw/afterTrading/dailyQuotes?date={d:%Y/%m/%d}&response=json",
     "https://www.tpex.org.tw/www/zh-tw/afterTrading/dailyQ?date={d:%Y/%m/%d}&type=EW&response=json",
     "https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php"
     "?l=zh-tw&d={roc}/{d:%m/%d}&se=EW&o=json",
@@ -155,16 +156,134 @@ def parse_tpex(js):
     raise ValueError("櫃買格式不符：找不到個股行情表")
 
 
+def _dates_in(js):
+    """回應裡宣告的資料日期（轉成 YYYYMMDD）；沒有就回傳空集合。"""
+    out = set()
+    cands = [js.get("date"), js.get("reportDate")]
+    for t in js.get("tables") or []:
+        if isinstance(t, dict):
+            cands += [t.get("date"), t.get("reportDate")]
+    for c in cands:
+        if not c:
+            continue
+        digits = re.sub(r"\D", "", str(c))
+        if len(digits) == 8:
+            out.add(digits)
+        elif len(digits) == 7:                       # 民國 1131120
+            out.add(f"{int(digits[:3]) + 1911}{digits[3:]}")
+    return out
+
+
+def check_date(js, d, label):
+    ds = _dates_in(js)
+    if ds and f"{d:%Y%m%d}" not in ds:
+        raise ValueError(f"{label} 回傳日期 {sorted(ds)} 不是 {d:%Y-%m-%d}（網址不支援指定日期）")
+
+
 def fetch_twse(d):
-    return parse_twse(http_json(TWSE_URL.format(d=d)))
+    js = http_json(TWSE_URL.format(d=d))
+    rows = parse_twse(js)
+    if rows is not None:
+        check_date(js, d, "證交所")
+    return rows
+
+
+def _same_as_last(rows, market, d):
+    """跟前一個已存交易日幾乎完全相同（收盤＋成交量），代表抓到的是同一份快照。"""
+    con = db.connect()
+    prev = con.execute("SELECT MAX(date) FROM daily WHERE market=? AND date<?",
+                       (market, d.isoformat())).fetchone()[0]
+    if not prev:
+        con.close()
+        return False
+    old = {c: (cl, v) for c, cl, v in con.execute(
+        "SELECT code, close, volume FROM daily WHERE market=? AND date=?", (market, prev))}
+    con.close()
+    both = [r for r in rows if r["code"] in old and r["close"] and r["volume"]]
+    if len(both) < 50:
+        return False
+    same = sum(1 for r in both if old[r["code"]] == (r["close"], r["volume"]))
+    return same / len(both) > 0.9
 
 
 def fetch_tpex(d):
     last = None
     for u in TPEX_URLS:
         try:
-            return parse_tpex(http_json(u.format(d=d, roc=d.year - 1911)))
+            js = http_json(u.format(d=d, roc=d.year - 1911))
+            rows = parse_tpex(js)
+            if rows is not None:
+                check_date(js, d, "櫃買")
+                if _same_as_last(rows, "TPEX", d):
+                    raise ValueError("櫃買回傳資料跟前一交易日完全相同（網址不支援指定日期）")
+            return rows
         except Exception as e:  # 換下一個網址
+            last = e
+    raise last
+
+
+# ---------- 除權息、減資（官方參考價） ----------
+ADJ_SOURCES = {
+    "TWSE_EX": ["https://www.twse.com.tw/rwd/zh/exRight/TWT49U?startDate={a:%Y%m%d}&endDate={b:%Y%m%d}&response=json"],
+    "TWSE_CR": ["https://www.twse.com.tw/rwd/zh/reducation/TWTAUU?startDate={a:%Y%m%d}&endDate={b:%Y%m%d}&response=json"],
+    "TPEX_EX": ["https://www.tpex.org.tw/www/zh-tw/bulletin/exDailyQ?startDate={a:%Y/%m/%d}&endDate={b:%Y/%m/%d}&response=json",
+                "https://www.tpex.org.tw/web/stock/exright/dailyquo/exDailyQ_result.php?l=zh-tw&d={ra}&ed={rb}&o=json"],
+    "TPEX_CR": ["https://www.tpex.org.tw/www/zh-tw/bulletin/revivt?startDate={a:%Y/%m/%d}&endDate={b:%Y/%m/%d}&response=json",
+                "https://www.tpex.org.tw/web/stock/exright/revivt/revivt_result.php?l=zh-tw&d={ra}&ed={rb}&o=json"],
+}
+# 舊版 aaData 沒有欄名時的欄位位置：(日期, 代號, 前收, 參考價)
+ADJ_POS = {"TPEX_EX": (0, 1, 3, 4), "TPEX_CR": (0, 1, 3, 4)}
+
+
+def parse_date_any(s):
+    digits = re.sub(r"\D", "", re.sub(r"<[^>]*>", "", str(s)))
+    if len(digits) == 8:
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:]}"
+    if len(digits) == 7:
+        return f"{int(digits[:3]) + 1911}-{digits[3:5]}-{digits[5:]}"
+    return None
+
+
+def parse_adj(js, kind):
+    """回傳 [(code, date, factor)]，factor = 參考價 ÷ 前收盤；認不出格式回傳 None。"""
+    out = []
+    matched = False
+    for fields, data in _tables(js):
+        fi = _col(fields, "除權息日期", "資料日期", "恢復買賣日期", "日期")
+        ci = _col(fields, "股票代號", "代號", "證券代號")
+        pi = _col(fields, "除權息前收盤價", "停止買賣前收盤價格", "最後交易日之收盤價格", "前收盤")
+        ri = _col(fields, "除權息參考價", "恢復買賣參考價", "減資恢復買賣開始日參考價格", "開盤競價基準", "開始交易基準價")
+        if None in (fi, ci, pi, ri):
+            continue
+        matched = True
+        for r in data:
+            out.append((str(r[ci]).strip(), parse_date_any(r[fi]), num(r[pi]), num(r[ri])))
+    if not matched and "aaData" in js and kind in ADJ_POS:
+        matched = True
+        a, b, c, e = ADJ_POS[kind]
+        for r in js.get("aaData") or []:
+            if len(r) > max(a, b, c, e):
+                out.append((str(r[b]).strip(), parse_date_any(r[a]), num(r[c]), num(r[e])))
+    res = []
+    for code, d, prev, ref in out:
+        if d and prev and ref and prev > 0 and ref > 0 and is_stock(code):
+            res.append((code, d, round(ref / prev, 6)))
+    if not matched and "沒有符合" not in str(js.get("stat", "")) and js.get("tables") != []:
+        return None
+    return res
+
+
+def fetch_adj(kind, year):
+    a, b = date(year, 1, 1), min(date(year, 12, 31), today_tpe())
+    last = None
+    for u in ADJ_SOURCES[kind]:
+        try:
+            js = http_json(u.format(a=a, b=b, ra=f"{year - 1911}/01/01", rb=f"{year - 1911}/{b:%m/%d}"), timeout=60)
+            items = parse_adj(js, kind)
+            if items is not None:
+                return items
+            last = ValueError(f"格式不符：{str(js)[:120]}")
+        except Exception as e:
             last = e
     raise last
 
@@ -282,6 +401,7 @@ class FetchJob:
                 st["done"] += 1
                 time.sleep(INTERVAL)
             else:
+                self._adj(start_date.year, end_date.year)
                 st["msg"] = "完成" if not dead else "部分完成（見錯誤）"
         except Exception as e:
             log.exception("抓取中止")
@@ -292,6 +412,64 @@ class FetchJob:
             st["finished"] = db.now()
 
 
+def _adj_years_needed(y0, y1):
+    done = {}
+    for kind in ADJ_SOURCES:
+        log = db.fetched("ADJ_" + kind)
+        done[kind] = {int(k) for k, v in log.items() if v == "ok"}
+    cur = today_tpe().year
+    return [(kind, y) for y in range(y0, y1 + 1) for kind in ADJ_SOURCES
+            if y not in done[kind] or y >= cur]
+
+
+def _adj_run(self, y0, y1):
+    st = self.state
+    todo = _adj_years_needed(y0, y1)
+    errs = []
+    for i, (kind, y) in enumerate(todo):
+        if self.stop_flag:
+            break
+        st["msg"] = f"抓除權息／減資 {kind} {y}（{i + 1}/{len(todo)}）"
+        try:
+            items = fetch_adj(kind, y)
+            db.save_adj(items, kind)
+            db.log_fetch(str(y), "ADJ_" + kind, "ok", len(items))
+        except Exception as e:
+            errs.append(f"{kind} {y}: {e}")
+            db.log_fetch(str(y), "ADJ_" + kind, f"error: {e}"[:200], 0)
+        time.sleep(INTERVAL)
+    if errs:
+        st["error"] = "；".join(errs[:4]) + ("…" if len(errs) > 4 else "")
+
+
+def _adj_only(self, y0, y1):
+    st = self.state
+    st.update(running=True, error=None, done=0, total=0, msg="準備抓除權息")
+    try:
+        self._adj(y0, y1)
+        st["msg"] = "除權息／減資資料完成" if not st["error"] else "部分完成（見錯誤）"
+    except Exception as e:
+        st["error"] = str(e)
+        st["msg"] = f"中止：{e}"
+    finally:
+        st["running"] = False
+        st["finished"] = db.now()
+
+
+def _start_adj(self):
+    if self.running():
+        return False
+    self.stop_flag = False
+    s = db.stats()
+    y0 = int((s["first"] or f"{today_tpe().year}")[:4])
+    self.thread = threading.Thread(target=self._adj_only, args=(y0, today_tpe().year), daemon=True)
+    self.thread.start()
+    return True
+
+
+FetchJob._adj = _adj_run
+FetchJob._adj_only = _adj_only
+FetchJob.start_adj = _start_adj
 JOB = FetchJob()
 
 
