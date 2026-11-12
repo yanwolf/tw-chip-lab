@@ -28,6 +28,7 @@ DEFAULT_CFG = {
     "max_pos": 10,
     "min_order": 5000,       # 每檔最低投入金額
     "limit_up": 1.03,        # 買進限價＝前收 × 1.03
+    "sell_limit": 0.97,      # 賣出限價＝前收 × 0.97（出場以成交為優先）
     "fee_rate": 0.001425,
     "fee_discount": 0.6,
     "min_fee": 1,            # 零股每筆最低手續費（依券商調整）
@@ -58,6 +59,26 @@ def tick(p):
 def floor_tick(p):
     t = tick(p)
     return round(math.floor(p / t + 1e-9) * t, 2)
+
+
+def ceil_tick(p):
+    t = tick(p)
+    return round(math.ceil(p / t - 1e-9) * t, 2)
+
+
+def ark_lines(sells, buys, c):
+    """轉成方舟下單網站「批次貼上」格式：代號,buy/sell,股數,價格,備註（零股一筆最多 999 股）。"""
+    out = []
+    for x in sells:
+        price = ceil_tick(x["last"] * c.get("sell_limit", 0.97))
+        q = int(x["shares"])
+        while q > 0:
+            n = min(q, 999)
+            out.append(f"{x['code']},sell,{n},{price},籌碼峰 {x['reason']}")
+            q -= n
+    for x in buys:
+        out.append(f"{x['code']},buy,{min(int(x['shares']), 999)},{x['limit']},籌碼峰 集中度{x['conc90'] * 100:.1f}%")
+    return "\n".join(out)
 
 
 def fee_of(c, amount):
@@ -255,7 +276,7 @@ def state():
         if why:
             h["exit"] = why
             sells.append({"code": code, "name": h["name"], "shares": sh, "reason": why,
-                          "est": round(sh * last_raw)})
+                          "est": round(sh * last_raw), "last": last_raw})
         holdings.append(h)
 
     equity = cash + mv
@@ -276,7 +297,7 @@ def state():
             continue
         price = floor_tick(g["raw_close"] * c["limit_up"])
         amt = min(budget_each, cash_after)
-        n = int(amt // (price * (1 + c["fee_rate"] * c["fee_discount"])))
+        n = min(999, int(amt // (price * (1 + c["fee_rate"] * c["fee_discount"]))))
         if n <= 0 or n * price < c["min_order"] * 0.8:
             break
         buys.append({"code": g["code"], "name": g["name"], "shares": n, "limit": price,
@@ -307,7 +328,7 @@ def state():
         "bench_value": round(bval) if not bmissing else None, "bench_missing": bmissing,
         "bench_ret": round(bval / deposited - 1, 4) if deposited and not bmissing else None,
         "holdings": sorted(holdings, key=lambda h: h["entry_date"]), "sells": sells, "buys": buys,
-        "free_slots": free, "scan": {k: sc[k] for k in ("date", "created")} if sc else None,
+        "free_slots": free, "ark_text": ark_lines(sells, buys, c), "scan": {k: sc[k] for k in ("date", "created")} if sc else None,
         "scan_count": len(sc["signals"]) if sc else 0,
         "cash_rows": cash_rows, "fills": fills,
     }

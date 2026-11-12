@@ -307,5 +307,15 @@ check("1111" not in bcodes and (not bcodes or bcodes[0] == "3333"), "買進建�
 check(all(x["limit"] == live.floor_tick(x["close"] * 1.03) and x["amount"] <= max(st3["equity"] / 10, 5000) + 1
           for x in st3["buys"]), "買進建議：限價＝前收×1.03，金額不超過每檔預算")
 check(len(bcodes) <= st3["free_slots"], "買進建議不超過空位（含資金不足時減少檔數）")
+lines = [l for l in st3["ark_text"].split("\n") if l]
+ok_fmt = all(len(l.split(",")) == 5 and l.split(",")[1] in ("buy", "sell") and 0 < int(l.split(",")[2]) < 1000
+             and float(l.split(",")[3]) > 0 for l in lines)
+check(lines and ok_fmt, "方舟貼上格式：代號,buy/sell,股數(1~999),價格,備註")
+check(sum(1 for l in lines if ",sell," in l) >= len(st3["sells"]) and
+      all(l.split(",")[0] in {x["code"] for x in st3["sells"]} | {x["code"] for x in st3["buys"]} for l in lines),
+      "方舟貼上：包含所有賣出與買進")
+big = live.ark_lines([{"code": "1234", "shares": 2100, "last": 50.0, "reason": "停損"}], [], live.cfg())
+check(big.split("\n") == ["1234,sell,999,48.5,籌碼峰 停損", "1234,sell,999,48.5,籌碼峰 停損", "1234,sell,102,48.5,籌碼峰 停損"],
+      "超過 999 股的賣出自動拆成多筆，賣出限價＝前收×0.97 向上取整")
 check(live.floor_tick(123.37) == 123.0 and live.floor_tick(45.33) == 45.3 and live.floor_tick(9.876) == 9.87, "限價依升降單位取整")
 print(f"\n全部通過：{ok} 項")

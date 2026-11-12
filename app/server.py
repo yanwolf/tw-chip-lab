@@ -140,9 +140,9 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200 if ok else 409, {"ok": ok} if ok else {"error": "掃描進行中"})
             if u.path == "/api/live/cfg":
                 c = live.cfg()
-                for k in ("max_pos", "min_order", "limit_up", "min_fee", "fee_discount"):
+                for k in ("max_pos", "min_order", "limit_up", "sell_limit", "min_fee", "fee_discount"):
                     if k in b and b[k] not in (None, ""):
-                        c[k] = float(b[k]) if k in ("limit_up", "fee_discount") else int(float(b[k]))
+                        c[k] = float(b[k]) if k in ("limit_up", "sell_limit", "fee_discount") else int(float(b[k]))
                 db.set_setting("live_cfg", c)
                 if isinstance(b.get("bench"), dict) and b["bench"]:
                     tot = sum(float(v) for v in b["bench"].values()) or 1
