@@ -23,7 +23,7 @@ from collections import defaultdict
 
 import numpy as np
 
-from . import chips, db
+from . import chips, db, portfolio
 
 DEFAULTS = {
     "start": "", "end": "",
@@ -45,11 +45,18 @@ DEFAULTS = {
     "max_hold": 60,
     "fee_discount": 0.6,
     "skip_limit_up": True,
+    "slippage": 0.0,         # 滑價，每邊（買、賣各扣一次），0.002 ＝ 0.2%
+    "max_value": 0,          # 20 日均成交額上限；0 ＝ 不限
+    "breadth_ma": 60,        # 大盤濾網：站上幾日均線
+    "breadth_min": 0.0,      # 站上均線的股票比例低於這個值就不進場；0 ＝ 關
+    "max_pos": 10,           # 投組模擬：同時最多持有幾檔
+    "rank": "conc",          # 空位不夠時：conc＝集中度最小優先；vol＝量比最大優先
     "sweep_key": "",         # 敏感度掃描：要掃的參數
     "sweep": "",             # 逗號分隔的值，例如 0.10,0.15,0.20
 }
 SWEEP_KEYS = ("conc_th", "vol_mult", "low_pos", "max_mcap", "min_mcap", "box_bars", "trail",
-              "max_hold", "max_stop")
+              "max_hold", "max_stop", "slippage", "min_value", "max_value", "breadth_min",
+              "breadth_ma", "max_pos")
 HORIZONS = (5, 10, 20, 60)
 # 分層：20 日均成交額、市值（原始收盤 × 目前股本）
 TIERS = {
@@ -85,6 +92,11 @@ def norm_params(p):
         out["sweep_key"] = ""
     out["sweep"] = str(out["sweep"] or "")
     out["box_bars"] = max(10, out["box_bars"])
+    out["breadth_ma"] = max(5, out["breadth_ma"])
+    out["max_pos"] = max(1, out["max_pos"])
+    out["slippage"] = min(max(out["slippage"], 0.0), 0.05)
+    if out["rank"] not in ("conc", "vol"):
+        out["rank"] = "conc"
     return out
 
 
@@ -125,7 +137,7 @@ def rolling_max(x, w):
     return out
 
 
-def run_stock(s, p, date_index):
+def run_stock(s, p, date_index, breadth=None, paths=None):
     """單一股票：回傳 (trades, signals, fwd_signal, baseline, tiers)。"""
     n = len(s.c)
     c, o = s.c, s.o
@@ -156,6 +168,7 @@ def run_stock(s, p, date_index):
         return [], [], [], [np.full(n, np.nan) for _ in HORIZONS], tiers   # 無股本：市值條件無法判斷
     for i in range(max(p["warmup"], 20), n):
         eligible[i] = (val20[i] >= p["min_value"]) and (c[i] >= p["min_price"]) \
+            and (p["max_value"] <= 0 or val20[i] <= p["max_value"]) \
             and start <= dates[i] <= end \
             and (p["max_mcap"] <= 0 or mcap[i] <= p["max_mcap"]) \
             and (p["min_mcap"] <= 0 or mcap[i] >= p["min_mcap"])
@@ -185,6 +198,10 @@ def run_stock(s, p, date_index):
             continue
         if s.v[t] < vol20[j] * p["vol_mult"]:
             continue
+        if p["breadth_min"] > 0 and breadth is not None:
+            b = breadth[date_index[dates[t]]]
+            if np.isnan(b) or b < p["breadth_min"]:
+                continue
         sig = {"code": s.code, "name": s.name, "market": s.market, "date": dates[t],
                "close": round(float(c[t]), 2), "conc90": round(float(conc[j]), 4),
                "poc": round(float(poc[j]), 2), "edge": round(float(edge[j]), 2),
@@ -228,7 +245,13 @@ def run_stock(s, p, date_index):
             px, reason, open_pos, exit_i = float(c[-1]), "持有中", True, n - 1
         else:
             px, open_pos = float(o[exit_i]), False
-        net = px * (1 - fee - TAX) / (entry * (1 + fee)) - 1
+        sl = p["slippage"]
+        buy, sell = entry * (1 + sl), px * (1 - sl)
+        net = sell * (1 - fee - TAX) / (buy * (1 + fee)) - 1
+        if paths is not None:
+            last = exit_i if open_pos else exit_i - 1
+            paths.append((date_index[dates[entry_i]],
+                          c[entry_i:last + 1] * (1 - fee - TAX) / (buy * (1 + fee))))
         trades.append({**sig, "entry_date": dates[entry_i], "entry": round(entry, 2),
                        "stop": round(stop, 2), "exit_date": dates[exit_i],
                        "exit": round(px, 2), "reason": reason, "open": open_pos,
@@ -358,8 +381,10 @@ def run(p, st=None):
     bcnt = np.zeros((len(HORIZONS), nd))
     tsum = {g: np.zeros((3, len(HORIZONS), nd)) for g in TIERS}
     tcnt = {g: np.zeros((3, len(HORIZONS), nd)) for g in TIERS}
-    trades, signals, fwd = [], [], []
+    trades, signals, fwd, paths = [], [], [], []
     est = 0
+    mkt = portfolio.market_context(all_dates, [c for c, _, _ in allc], shares, con,
+                                   p["breadth_ma"], st)
     for k, (code, _, _) in enumerate(allc):
         st["done"] = k
         st["msg"] = f"{st.get('prefix') or ''} 計算 {code}（{k}/{len(allc)}）".strip()
@@ -367,7 +392,7 @@ def run(p, st=None):
         if s is None:
             continue
         est += s.turn_est
-        tr, sg, fw, base, tiers = run_stock(s, p, date_index)
+        tr, sg, fw, base, tiers = run_stock(s, p, date_index, mkt["breadth"], paths)
         trades += tr
         signals += sg
         fwd += fw
@@ -422,8 +447,12 @@ def run(p, st=None):
 
     last_date = all_dates[-1] if all_dates else None
     latest = [s for s in signals if s["date"] == last_date]
+    st["msg"] = "投組模擬"
+    port = portfolio.simulate(trades, paths, all_dates, mkt["ew"], p["max_pos"], p["rank"])
+    b_last = mkt["breadth"][-1] if len(mkt["breadth"]) else np.nan
     trades.sort(key=lambda t: t["entry_date"])
     summary = {**summarize(trades), "signals": len(signals),
+               "cagr": port and port["cagr"], "mdd": port and port["mdd"],
                "skipped": sum(1 for s in signals if s.get("skipped")),
                "stocks": len(allc), "turn_est": est,
                "range": [p["start"] or (all_dates[0] if all_dates else ""),
@@ -433,7 +462,8 @@ def run(p, st=None):
                "t20": next((e.get("t") for e in event if e["h"] == 20), None),
                "t20_day": next((e.get("t_day") for e in event if e["h"] == 20), None)}
     result = {"event": event, "tiers": tier_out, "years": years, "reasons": reason_stats,
-              "trades": trades, "latest": latest, "last_date": last_date}
+              "trades": trades, "latest": latest, "last_date": last_date, "portfolio": port,
+              "breadth_now": None if np.isnan(b_last) else round(float(b_last), 3)}
     st["msg"] = "儲存結果"
     return db.save_run(p, summary, result)
 

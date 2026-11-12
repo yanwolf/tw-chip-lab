@@ -148,4 +148,33 @@ job2._run(backtest.norm_params({"min_value": 1e6, "sweep_key": "max_hold", "swee
 rs = db.list_runs()[:2]
 check(len(db.list_runs()) == n0 + 2 and {x["params"]["max_hold"] for x in rs} == {40, 90}
       and all(isinstance(x["params"]["max_hold"], int) for x in rs), "掃描最長持有（整數參數）")
+print("投組與新參數")
+r0 = db.get_run(backtest.run(backtest.norm_params({"min_value": 1e6})))
+pt = r0["portfolio"]
+check(pt and pt["curve"]["v"][0] > 0 and -1 < pt["mdd"] <= 0 and pt["taken"] >= 1, "投組模擬有資金曲線、回撤")
+check(r0["summary"]["cagr"] == pt["cagr"], "摘要帶年化報酬")
+r1 = db.get_run(backtest.run(backtest.norm_params({"min_value": 1e6, "slippage": 0.01})))
+t0 = {(t["code"], t["entry_date"]): t["ret"] for t in r0["trades"]}
+t1 = {(t["code"], t["entry_date"]): t["ret"] for t in r1["trades"]}
+k = next(iter(t0.keys() & t1.keys()))
+check(t1[k] < t0[k] - 0.015, "滑價 1% 每邊 → 每筆報酬少約 2%")
+r2 = db.get_run(backtest.run(backtest.norm_params({"min_value": 1e6, "breadth_min": 1.01})))
+check(r2["summary"]["signals"] == 0, "大盤濾網門檻 > 100% → 沒有訊號")
+r3 = db.get_run(backtest.run(backtest.norm_params({"min_value": 1e6, "max_value": 1})))
+check(r3["summary"]["signals"] == 0, "成交額上限 1 元 → 沒有訊號")
+from app import portfolio
+con_ = db.connect()
+mc = portfolio.market_context(sorted({d for (d,) in con_.execute("SELECT DISTINCT date FROM daily")}),
+                              ["1111", "2222", "3333"], db.load_shares(), con_, 60)
+con_.close()
+bb = mc["breadth"][~np.isnan(mc["breadth"])]
+check(len(bb) > 100 and bb.min() >= 0 and bb.max() <= 1, "大盤寬度介於 0~1")
+fake = [{"entry_date": days[10], "exit_date": days[12], "open": False, "ret": 0.10, "conc90": 0.1, "vol_x": 2},
+        {"entry_date": days[10], "exit_date": days[12], "open": False, "ret": 0.10, "conc90": 0.2, "vol_x": 2}]
+paths_ = [(10, np.array([1.0, 1.05])), (10, np.array([1.0, 1.05]))]
+sim = portfolio.simulate(fake, paths_, days, np.ones(len(days)), max_pos=1)
+check(sim["taken"] == 1 and sim["skipped"] == 1 and abs(sim["total"] - 0.10) < 1e-9,
+      "投組：空位 1 檔只買 1 檔，100% 投入賺 10%")
+sim2 = portfolio.simulate(fake, paths_, days, np.ones(len(days)), max_pos=4)
+check(sim2["taken"] == 2 and abs(sim2["total"] - 0.05) < 1e-9, "投組：4 個空位各 25%，兩檔各賺 10% → 總 5%")
 print(f"\n全部通過：{ok} 項")

@@ -131,6 +131,7 @@ canvas{width:100%;display:block}
     </div></fieldset>
     <fieldset><legend>篩選與期間</legend><div class="grid">
       <label>20 日均成交額 ≥<input name="min_value" type="number" step="5000000"></label>
+      <label>20 日均成交額 ≤（0 不限）<input name="max_value" type="number" step="10000000"></label>
       <label>股價 ≥<input name="min_price" type="number" step="1"></label>
       <label>市值 ≥（億，0 不限）<input name="min_mcap" type="number" step="50"></label>
       <label>市值 ≤（億，0 不限）<input name="max_mcap" type="number" step="50"></label>
@@ -142,8 +143,15 @@ canvas{width:100%;display:block}
       <label><input type="checkbox" name="mk_TPEX" checked>上櫃</label>
       <label><input type="checkbox" name="skip_limit_up" checked>開盤近漲停不進場</label>
     </div></fieldset>
+    <fieldset><legend>成本、大盤濾網、投組</legend><div class="grid">
+      <label>滑價（每邊，0.002＝0.2%）<input name="slippage" type="number" step="0.001"></label>
+      <label>大盤濾網：站上幾日均線<input name="breadth_ma" type="number" step="10"></label>
+      <label>站上比例 ≥（0＝關）<input name="breadth_min" type="number" step="0.05"></label>
+      <label>投組最多持有（檔）<input name="max_pos" type="number" step="1"></label>
+      <label>空位不夠時優先<select name="rank"><option value="conc">集中度最小</option><option value="vol">量比最大</option></select></label>
+    </div><p class="note">大盤濾網＝全市場收盤站上均線的股票比例，低於門檻當天不進場。投組模擬每檔投入總資產 ÷ 最多持有檔數。</p></fieldset>
     <fieldset><legend>敏感度掃描（選填）</legend><div class="grid">
-      <label>要掃的參數<select name="sweep_key"><option value="">不掃描</option><option value="conc_th">集中度上限</option><option value="vol_mult">量倍數</option><option value="low_pos">低位倍數</option><option value="max_mcap">市值上限</option><option value="box_bars">箱型天數</option><option value="trail">移動停利回落</option><option value="max_hold">最長持有（日）</option><option value="max_stop">最大停損</option><option value="min_mcap">市值下限</option></select></label>
+      <label>要掃的參數<select name="sweep_key"><option value="">不掃描</option><option value="conc_th">集中度上限</option><option value="vol_mult">量倍數</option><option value="low_pos">低位倍數</option><option value="max_mcap">市值上限</option><option value="box_bars">箱型天數</option><option value="trail">移動停利回落</option><option value="max_hold">最長持有（日）</option><option value="max_stop">最大停損</option><option value="min_mcap">市值下限</option><option value="slippage">滑價</option><option value="min_value">成交額下限</option><option value="max_value">成交額上限</option><option value="breadth_min">大盤濾網門檻</option><option value="max_pos">投組持有檔數</option></select></label>
       <label style="grid-column:span 2">值（逗號或頓號分隔，最多 8 個）<input name="sweep" placeholder="例：0.10, 0.15, 0.20（要自己輸入）"></label>
     </div><p class="note">每個值各跑一次完整回測、各存一筆紀錄，其他參數用上面的設定。</p></fieldset>
     <div class="row"><button class="act" id="bGo">執行回測</button><button class="ghost" id="bReset">恢復預設</button><span class="pill" id="bPill">閒置</span></div>
@@ -237,10 +245,14 @@ $('#bReset').onclick=()=>fillForm(DEF);
 $('#bGo').onclick=async()=>{try{await post('/api/backtest',readForm());refresh()}catch(e){alert(e.message)}};
 
 // ---------- 回測結果 ----------
+function other(p){const o=[];if(+p.slippage)o.push('滑'+(p.slippage*100).toFixed(1)+'%');
+  if(+p.min_value&&+p.min_value!==20000000)o.push('額≥'+(p.min_value/1e8)+'億');if(+p.max_value)o.push('額≤'+(p.max_value/1e8)+'億');
+  if(+p.breadth_min)o.push('寬≥'+(p.breadth_min*100).toFixed(0)+'%/'+p.breadth_ma+'MA');if(p.max_pos!=null&&+p.max_pos!==10)o.push(p.max_pos+'檔');
+  return o.join(' ')||'—'}
 async function loadRuns(){const rs=await api('/api/runs');if(!rs.length)return;
   const cap=p=>(p.min_mcap||p.max_mcap)?`${p.min_mcap||0}～${p.max_mcap||'∞'}`:'全部';
-  $('#runs').innerHTML=`<table><thead><tr><th class="l">#</th><th class="l">模式</th><th>集中度</th><th>低位</th><th>量倍</th><th class="l">市值(億)</th><th>停利</th><th>持有</th><th>停損</th><th>訊號</th><th>20日超額</th><th>中位數</th><th>t(日)</th><th>交易</th><th>PF</th></tr></thead><tbody>`+
-    rs.map(r=>{const p=r.params,s=r.summary;return `<tr data-id="${r.id}" tabindex="0"${curRun?.id===r.id?' style="background:var(--gold-soft)"':''}><td class="l">${r.id}</td><td class="l">${p.mode==='box'?'箱型':'籌碼'}</td><td>${p.conc_th}</td><td>${p.low_pos??'—'}</td><td>${p.vol_mult}</td><td class="l">${cap(p)}</td><td>${p.trail}</td><td>${p.max_hold}</td><td>${p.max_stop}</td><td>${fmt(s.signals)}</td><td class="${cls(s.excess20)}">${pct(s.excess20,2)}</td><td class="${cls(s.median20)}">${pct(s.median20,2)}</td><td>${s.t20_day??'—'}</td><td>${fmt(s.n)}</td><td>${s.pf??'—'}</td></tr>`}).join('')+'</tbody></table>';
+  $('#runs').innerHTML=`<table><thead><tr><th class="l">#</th><th class="l">模式</th><th>集中度</th><th>低位</th><th>量倍</th><th class="l">市值(億)</th><th>停利</th><th>持有</th><th>停損</th><th class="l">其他</th><th>訊號</th><th>20日超額</th><th>中位數</th><th>t(日)</th><th>交易</th><th>PF</th><th>年化</th><th>回撤</th></tr></thead><tbody>`+
+    rs.map(r=>{const p=r.params,s=r.summary;return `<tr data-id="${r.id}" tabindex="0"${curRun?.id===r.id?' style="background:var(--gold-soft)"':''}><td class="l">${r.id}</td><td class="l">${p.mode==='box'?'箱型':'籌碼'}</td><td>${p.conc_th}</td><td>${p.low_pos??'—'}</td><td>${p.vol_mult}</td><td class="l">${cap(p)}</td><td>${p.trail}</td><td>${p.max_hold}</td><td>${p.max_stop}</td><td class="l">${other(p)}</td><td>${fmt(s.signals)}</td><td class="${cls(s.excess20)}">${pct(s.excess20,2)}</td><td class="${cls(s.median20)}">${pct(s.median20,2)}</td><td>${s.t20_day??'—'}</td><td>${fmt(s.n)}</td><td>${s.pf??'—'}</td><td class="${cls(s.cagr)}">${pct(s.cagr,1)}</td><td>${s.mdd!=null?pct(s.mdd,1):'—'}</td></tr>`}).join('')+'</tbody></table>';
   $$('#runs tr[data-id]').forEach(tr=>{tr.onclick=()=>openRun(+tr.dataset.id);tr.onkeydown=e=>{if(e.key==='Enter')openRun(+tr.dataset.id)}})}
 async function openRun(id){curRun=await api("/api/runs/"+id);fillForm({...DEF,...curRun.params});
   $$('#runs tr[data-id]').forEach(tr=>tr.style.background=+tr.dataset.id===id?'var(--gold-soft)':'');renderRun()}
@@ -265,6 +277,7 @@ function renderRun(){const r=curRun,s=r.summary;
   $('#result').innerHTML=`
   <div class="panel"><p class="verdict">${verdict}</p>
     <p class="note">期間 ${s.range[0]} ～ ${s.range[1]}・掃描 ${fmt(s.stocks)} 檔${s.turn_est?`・其中 ${s.turn_est} 檔無股本資料，換手率用估計值`:''}。「同日大盤」是同一天所有符合流動性條件股票的平均報酬，超額報酬才代表訊號本身的價值。</p></div>
+  ${portPanel(r)}
   <div class="panel"><h2>事件研究</h2><div class="scroll">${ev}</div></div>
   ${r.tiers?`<div class="panel"><h2>分層：哪一段股票適用</h2>
     <div class="row" style="margin-bottom:8px" id="tierTabs">${Object.entries(r.tiers).map(([g,x])=>`<button class="ghost${g===tierG?' cur':''}" data-g="${g}">依${x.name}</button>`).join('')}<label style="margin-left:auto"><input type="checkbox" id="tierYears"${tierYears?' checked':''}>逐年</label></div>
@@ -281,6 +294,27 @@ function renderRun(){const r=curRun,s=r.summary;
   $('#tierYears').onchange=e=>{tierYears=e.target.checked;renderTier()};
   $$('#tierTabs button').forEach(b=>b.onclick=()=>{tierG=b.dataset.g;$$('#tierTabs button').forEach(x=>x.classList.toggle('cur',x===b));renderTier()});
   bindRows($('#result'));renderTier();renderTrades()}
+function portPanel(r){const P=r.portfolio;if(!P)return '';
+  const kv=[['年化報酬',pct(P.cagr,1),cls(P.cagr)],['最大回撤',pct(P.mdd,1),'down'],['總報酬',pct(P.total,0),cls(P.total)],
+    ['等權大盤 年化',pct(P.bench_cagr,1),cls(P.bench_cagr)],['等權大盤 回撤',pct(P.bench_mdd,1),'down'],
+    ['採用／略過',`${fmt(P.taken)}／${fmt(P.skipped)}`],['平均持股比例',(P.exposure*100).toFixed(0)+'%']]
+    .map(([k,v,c])=>`<div class="kv"><small>${k}</small><b class="${c||''}">${v}</b></div>`).join('');
+  const yr=`<table><thead><tr><th class="l">年度</th><th>策略</th><th>等權大盤</th><th>差距</th><th>年內最大回撤</th></tr></thead><tbody>`+
+    P.years.map(y=>`<tr tabindex="-1"><td class="l">${y.year}</td><td class="${cls(y.ret)}">${pct(y.ret,1)}</td><td class="${cls(y.bench)}">${pct(y.bench,1)}</td><td class="${cls(y.ret-y.bench)}">${pct(y.ret-y.bench,1)}</td><td>${pct(y.mdd,1)}</td></tr>`).join('')+'</tbody></table>';
+  return `<div class="panel"><h2>投組模擬（最多 ${P.max_pos} 檔、每檔等額）</h2>
+    <div class="grid">${kv}</div>${curveSvg(P.curve)}
+    <div class="row sub" style="gap:14px"><span><i style="display:inline-block;width:14px;height:3px;background:var(--gold);vertical-align:middle"></i> 策略</span><span><i style="display:inline-block;width:14px;height:3px;background:var(--muted);vertical-align:middle"></i> 等權大盤</span><span>對數刻度</span>${r.breadth_now!=null?`<span>目前大盤寬度 ${(r.breadth_now*100).toFixed(0)}%</span>`:''}</div>
+    <div class="scroll" style="margin-top:10px">${yr}</div>
+    <p class="note">${P.start} ～ ${P.end}。含手續費、證交稅${+r.params.slippage?'、滑價':''}；每天以收盤價計值。冷門股實際能買的金額有限，資金大時要另外評估。</p></div>`}
+function curveSvg(c){const W=600,H=220,pad=6,n=c.v.length;if(n<2)return '';
+  const all=[...c.v,...c.b].filter(x=>x>0).map(Math.log),lo=Math.min(...all),hi=Math.max(...all),rg=(hi-lo)||1;
+  const X=i=>pad+i/(n-1)*(W-2*pad),Y=v=>H-pad-(Math.log(v)-lo)/rg*(H-2*pad);
+  const line=(arr,col,w)=>`<polyline fill="none" stroke="${col}" stroke-width="${w}" vector-effect="non-scaling-stroke" points="${arr.map((v,i)=>X(i).toFixed(1)+','+Y(v).toFixed(1)).join(' ')}"/>`;
+  const y1=Y(1);const yrs=[];let last='';c.d.forEach((d,i)=>{if(d.slice(0,4)!==last){last=d.slice(0,4);yrs.push([i,last])}});
+  return `<svg viewBox="0 0 ${W} ${H+16}" style="width:100%;height:auto;margin-top:10px" role="img" aria-label="資金曲線">
+    <line x1="0" x2="${W}" y1="${y1}" y2="${y1}" stroke="var(--line)" stroke-dasharray="3 3"/>
+    ${yrs.map(([i,y])=>`<line x1="${X(i)}" x2="${X(i)}" y1="0" y2="${H}" stroke="var(--line)"/><text x="${X(i)+3}" y="${H+13}" font-size="11" fill="var(--muted)">${y}</text>`).join('')}
+    ${line(c.b,'var(--muted)',1.5)}${line(c.v,'var(--gold)',2.2)}</svg>`}
 let tierG='val',tierYears=false;
 function renderTier(){if(!curRun.tiers)return;const rows=curRun.tiers[tierG].rows,name=curRun.tiers[tierG].name;
   const ev=(x,h)=>x.event.find(e=>e.h===h)||{},tv=v=>v==null?'—':v+(Math.abs(v)>=2?' ✓':'');
