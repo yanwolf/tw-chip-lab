@@ -5,13 +5,20 @@
 這裡分上市／上櫃、成交額高低統計：每年等權報酬、上漲比例、還原事件數量，並列出最極端的日報酬。
 """
 import heapq
+import json
+import os
+import threading
+import time
+import traceback
 
 import numpy as np
 
 from . import chips, db
 
+RESULT_PATH = os.path.join(db.DATA_DIR, "diag.json")
 
-def run(min_value=20_000_000):
+
+def run(min_value=20_000_000, st=None):
     shares = db.load_shares()
     con = db.connect()
     all_dates = [d for (d,) in con.execute("SELECT DISTINCT date FROM daily ORDER BY date")]
@@ -20,7 +27,11 @@ def run(min_value=20_000_000):
     grp = {}                                   # (mkt, liq) -> dict of arrays
     ev = {}
     top = []
-    for code, name, mkt in db.codes():
+    allc = db.codes()
+    for k, (code, name, mkt) in enumerate(allc):
+        if st is not None:
+            st["done"], st["total"] = k, len(allc)
+            st["msg"] = f"檢查 {code}（{k}/{len(allc)}）"
         s = chips.load(code, shares.get(code), con)
         if s is None:
             continue
@@ -77,3 +88,51 @@ def run(min_value=20_000_000):
                  "adj_ret": a, "raw_ret": b}
                 for _, c, n, m, d, p0, p1, a, b in sorted(top, reverse=True)]
     return {"years": years, "events": events, "extremes": extremes, "min_value": min_value}
+
+
+class DiagJob:
+    """背景執行資料檢查，結果存成 DATA_DIR/diag.json，關掉網頁也不會中斷。"""
+
+    def __init__(self):
+        self.thread = None
+        self.state = {"running": False, "msg": "閒置", "done": 0, "total": 0, "error": None}
+
+    def running(self):
+        return bool(self.thread and self.thread.is_alive())
+
+    def start(self):
+        if self.running():
+            return False
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+        return True
+
+    def _run(self):
+        st = self.state
+        st.update(running=True, error=None, done=0, msg="讀取資料")
+        t0 = time.time()
+        try:
+            res = run(st=st)
+            res["created"] = db.now()
+            res["seconds"] = round(time.time() - t0)
+            os.makedirs(os.path.dirname(RESULT_PATH), exist_ok=True)
+            with open(RESULT_PATH, "w", encoding="utf-8") as f:
+                json.dump(res, f, ensure_ascii=False)
+            st["msg"] = f"完成（{res['seconds']} 秒）"
+        except Exception as e:
+            traceback.print_exc()
+            st["error"] = str(e)
+            st["msg"] = f"失敗：{e}"
+        finally:
+            st["running"] = False
+
+
+def last_result():
+    try:
+        with open(RESULT_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+JOB = DiagJob()

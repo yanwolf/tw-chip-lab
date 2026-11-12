@@ -192,4 +192,7 @@ dg = diag.run(min_value=1e6)
 check(dg["events"] and dg["years"] and len(dg["extremes"]) > 0, "資料檢查有輸出")
 ev3 = {e["market"]: e for e in dg["events"]}["TWSE"]
 check(ev3["events"] == 1, "資料檢查：合成資料只有 1 個除權息事件")
+diag.DiagJob()._run()
+lr = diag.last_result()
+check(lr and lr["created"] and lr["events"], "資料檢查在背景跑完並存檔")
 print(f"\n全部通過：{ok} 項")
