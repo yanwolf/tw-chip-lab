@@ -107,6 +107,10 @@ canvas{width:100%;display:block}
     <div class="sub" id="fMsg"></div>
     <p class="note">一天上市、上櫃各一個請求，間隔約 4 秒以免被證交所封鎖。三年約 1,500 個請求，需 1.5～2 小時；中斷後再按開始會從缺的日期續抓。</p>
   </div>
+  <div class="panel"><h2>資料檢查</h2>
+    <div class="row"><button class="ghost" id="dGo">執行檢查</button><span class="sub" id="dMsg">約需 30～60 秒</span></div>
+    <div id="diag"></div>
+  </div>
 </section>
 
 <!-- 回測 -->
@@ -234,6 +238,21 @@ $('#fGo').onclick=async()=>{try{await post('/api/fetch',{start:$('#fStart').valu
 $('#fStop').onclick=async()=>{await post('/api/fetch/stop');refresh()};
 $('#fShares').onclick=async()=>{$('#fShares').disabled=true;try{const r=await post('/api/shares');alert('股本：上市 '+r.TWSE+'、上櫃 '+r.TPEX);refresh()}catch(e){alert(e.message)}$('#fShares').disabled=false};
 
+// ---------- 資料檢查 ----------
+$('#dGo').onclick=async()=>{$('#dGo').disabled=true;$('#dMsg').textContent='檢查中…';
+  try{const g=await api('/api/diag');$('#dMsg').textContent='完成';
+    const ev=`<table><thead><tr><th class="l">市場</th><th>檔數</th><th>每檔每年還原事件</th><th>事件總數</th><th>向下調整比例</th></tr></thead><tbody>`+
+      g.events.map(e=>`<tr tabindex="-1"><td class="l">${e.market==='TWSE'?'上市':'上櫃'}</td><td>${fmt(e.stocks)}</td><td>${e.per_year}</td><td>${fmt(e.events)}</td><td>${e.down_share!=null?(e.down_share*100).toFixed(0)+'%':'—'}</td></tr>`).join('')+'</tbody></table>';
+    const yr=`<table><thead><tr><th class="l">市場</th><th class="l">成交額</th><th class="l">年度</th><th>等權報酬</th><th>平均日報酬</th><th>上漲比例</th><th>單日 >11%</th></tr></thead><tbody>`+
+      g.years.map(y=>`<tr tabindex="-1"><td class="l">${y.market==='TWSE'?'上市':'上櫃'}</td><td class="l">${y.liq==='liquid'?'≥ 2千萬':'< 2千萬'}</td><td class="l">${y.year}</td><td class="${cls(y.ew)}">${pct(y.ew,1)}</td><td>${(y.mean*100).toFixed(3)}%</td><td>${(y.up*100).toFixed(1)}%</td><td>${fmt(y.big)}</td></tr>`).join('')+'</tbody></table>';
+    const ex=`<table><thead><tr><th class="l">代號</th><th class="l">名稱</th><th class="l">市場</th><th class="l">日期</th><th>前收</th><th>收盤</th><th>還原報酬</th><th>原始報酬</th></tr></thead><tbody>`+
+      g.extremes.map(x=>`<tr data-code="${x.code}" data-date="${x.date}" tabindex="0"><td class="l">${x.code}</td><td class="l">${esc(x.name)}</td><td class="l">${x.market==='TWSE'?'上市':'上櫃'}</td><td class="l">${x.date}</td><td>${x.prev_raw}</td><td>${x.raw}</td><td>${pct(x.adj_ret,1)}</td><td>${pct(x.raw_ret,1)}</td></tr>`).join('')+'</tbody></table>';
+    $('#diag').innerHTML=`<h2 style="margin-top:12px">還原事件</h2><div class="scroll">${ev}</div><p class="note">正常約每檔每年 1～2 次（除息、除權、減資）。明顯偏高代表漲跌方向解析有誤。</p>
+      <h2 style="margin-top:12px">逐年統計</h2><div class="scroll">${yr}</div><p class="note">台股等權報酬一般在 ±50% 以內；上漲比例通常在 40～50%。</p>
+      <h2 style="margin-top:12px">最極端的日報酬</h2><div class="scroll">${ex}</div><p class="note">台股漲跌幅限制 10%，超過的通常是除權息、減資、新上市或資料錯誤；點一列可看籌碼圖。</p>`;
+    bindRows($('#diag'))}catch(e){$('#dMsg').textContent='失敗：'+e.message}
+  $('#dGo').disabled=false};
+
 // ---------- 參數 ----------
 function fillForm(p){const f=$('#pForm');for(const [k,v] of Object.entries(p)){
   if(k==='markets'){f.mk_TWSE.checked=v.includes('TWSE');f.mk_TPEX.checked=v.includes('TPEX');continue}
@@ -296,16 +315,16 @@ function renderRun(){const r=curRun,s=r.summary;
   bindRows($('#result'));renderTier();renderTrades()}
 function portPanel(r){const P=r.portfolio;if(!P)return '';
   const kv=[['年化報酬',pct(P.cagr,1),cls(P.cagr)],['最大回撤',pct(P.mdd,1),'down'],['總報酬',pct(P.total,0),cls(P.total)],
-    ['等權大盤 年化',pct(P.bench_cagr,1),cls(P.bench_cagr)],['等權大盤 回撤',pct(P.bench_mdd,1),'down'],
+    ['同條件等權 年化',pct(P.bench_cagr,1),cls(P.bench_cagr)],['同條件等權 回撤',pct(P.bench_mdd,1),'down'],
     ['採用／略過',`${fmt(P.taken)}／${fmt(P.skipped)}`],['平均持股比例',(P.exposure*100).toFixed(0)+'%']]
     .map(([k,v,c])=>`<div class="kv"><small>${k}</small><b class="${c||''}">${v}</b></div>`).join('');
-  const yr=`<table><thead><tr><th class="l">年度</th><th>策略</th><th>等權大盤</th><th>差距</th><th>年內最大回撤</th></tr></thead><tbody>`+
+  const yr=`<table><thead><tr><th class="l">年度</th><th>策略</th><th>同條件等權</th><th>差距</th><th>年內最大回撤</th></tr></thead><tbody>`+
     P.years.map(y=>`<tr tabindex="-1"><td class="l">${y.year}</td><td class="${cls(y.ret)}">${pct(y.ret,1)}</td><td class="${cls(y.bench)}">${pct(y.bench,1)}</td><td class="${cls(y.ret-y.bench)}">${pct(y.ret-y.bench,1)}</td><td>${pct(y.mdd,1)}</td></tr>`).join('')+'</tbody></table>';
   return `<div class="panel"><h2>投組模擬（最多 ${P.max_pos} 檔、每檔等額）</h2>
     <div class="grid">${kv}</div>${curveSvg(P.curve)}
-    <div class="row sub" style="gap:14px"><span><i style="display:inline-block;width:14px;height:3px;background:var(--gold);vertical-align:middle"></i> 策略</span><span><i style="display:inline-block;width:14px;height:3px;background:var(--muted);vertical-align:middle"></i> 等權大盤</span><span>對數刻度</span>${r.breadth_now!=null?`<span>目前大盤寬度 ${(r.breadth_now*100).toFixed(0)}%</span>`:''}</div>
+    <div class="row sub" style="gap:14px"><span><i style="display:inline-block;width:14px;height:3px;background:var(--gold);vertical-align:middle"></i> 策略</span><span><i style="display:inline-block;width:14px;height:3px;background:var(--muted);vertical-align:middle"></i> 同條件等權</span><span>對數刻度</span>${r.breadth_now!=null?`<span>目前大盤寬度 ${(r.breadth_now*100).toFixed(0)}%</span>`:''}</div>
     <div class="scroll" style="margin-top:10px">${yr}</div>
-    <p class="note">${P.start} ～ ${P.end}。含手續費、證交稅${+r.params.slippage?'、滑價':''}；每天以收盤價計值。冷門股實際能買的金額有限，資金大時要另外評估。</p></div>`}
+    <p class="note">${P.start} ～ ${P.end}。含手續費、證交稅${+r.params.slippage?'、滑價':''}；每天以收盤價計值。「同條件等權」＝每天平均持有所有符合同樣篩選條件（成交額、股價、市值）的股票。冷門股實際能買的金額有限，資金大時要另外評估。</p></div>`}
 function curveSvg(c){const W=600,H=220,pad=6,n=c.v.length;if(n<2)return '';
   const all=[...c.v,...c.b].filter(x=>x>0).map(Math.log),lo=Math.min(...all),hi=Math.max(...all),rg=(hi-lo)||1;
   const X=i=>pad+i/(n-1)*(W-2*pad),Y=v=>H-pad-(Math.log(v)-lo)/rg*(H-2*pad);

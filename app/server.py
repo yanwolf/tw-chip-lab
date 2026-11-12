@@ -16,7 +16,7 @@ from datetime import date, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from . import backtest, db, fetch
+from . import backtest, db, diag, fetch
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
 STATIC = os.path.join(os.path.dirname(__file__), "static")
@@ -80,6 +80,8 @@ class H(BaseHTTPRequestHandler):
             if u.path.startswith("/api/runs/"):
                 r = db.get_run(int(u.path.rsplit("/", 1)[1]))
                 return self._send(200 if r else 404, r or {"error": "找不到這次回測"})
+            if u.path == "/api/diag":
+                return self._send(200, diag.run())
             if u.path == "/api/chips":
                 code = (q.get("code") or "").strip()
                 v = backtest.chip_view(code, q.get("date") or None,

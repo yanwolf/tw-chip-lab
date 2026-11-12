@@ -177,4 +177,19 @@ check(sim["taken"] == 1 and sim["skipped"] == 1 and abs(sim["total"] - 0.10) < 1
       "投組：空位 1 檔只買 1 檔，100% 投入賺 10%")
 sim2 = portfolio.simulate(fake, paths_, days, np.ones(len(days)), max_pos=4)
 check(sim2["taken"] == 2 and abs(sim2["total"] - 0.05) < 1e-9, "投組：4 個空位各 25%，兩檔各賺 10% → 總 5%")
+# 漲跌少負號的資料不應被當成除權息
+db.save_day([{"code": "4444", "name": "少負號", "open": 10, "high": 10, "low": 10, "close": 10, "volume": 1e6, "value": 1e7, "change": 0}], days[0], "TPEX", "ok")
+pxs = [10.0]
+for i in range(1, 60):
+    pxs.append(round(pxs[-1] * (0.98 if i % 2 else 1.03), 2))
+    chg = round(pxs[-1] - pxs[-2], 2)
+    db.save_day([{"code": "4444", "name": "少負號", "open": pxs[-1], "high": pxs[-1], "low": pxs[-1], "close": pxs[-1],
+                  "volume": 1e6, "value": 1e7, "change": abs(chg)}], days[i], "TPEX", "ok")
+s4 = chips.load("4444", None)
+check(len(s4.events) == 0 and abs(s4.c[-1] - pxs[-1]) < 1e-6, "漲跌少負號 → 不誤判成除權息、價格不被扭曲")
+from app import diag
+dg = diag.run(min_value=1e6)
+check(dg["events"] and dg["years"] and len(dg["extremes"]) > 0, "資料檢查有輸出")
+ev3 = {e["market"]: e for e in dg["events"]}["TWSE"]
+check(ev3["events"] == 1, "資料檢查：合成資料只有 1 個除權息事件")
 print(f"\n全部通過：{ok} 項")

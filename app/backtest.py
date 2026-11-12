@@ -165,7 +165,7 @@ def run_stock(s, p, date_index, breadth=None, paths=None):
     eligible = np.zeros(n, dtype=bool)
     need_cap = p["max_mcap"] > 0 or p["min_mcap"] > 0
     if need_cap and mcap is None:
-        return [], [], [], [np.full(n, np.nan) for _ in HORIZONS], tiers   # 無股本：市值條件無法判斷
+        return [], [], [], [np.full(n, np.nan) for _ in HORIZONS], tiers, np.zeros(n, bool)  # 無股本
     for i in range(max(p["warmup"], 20), n):
         eligible[i] = (val20[i] >= p["min_value"]) and (c[i] >= p["min_price"]) \
             and (p["max_value"] <= 0 or val20[i] <= p["max_value"]) \
@@ -257,7 +257,7 @@ def run_stock(s, p, date_index, breadth=None, paths=None):
                        "exit": round(px, 2), "reason": reason, "open": open_pos,
                        "days": int(exit_i - entry_i), "ret": round(net, 4)})
         hold_until = exit_i
-    return trades, signals, fwd, base, tiers
+    return trades, signals, fwd, base, tiers, eligible
 
 
 def event_study(fwd, base_of):
@@ -382,6 +382,7 @@ def run(p, st=None):
     tsum = {g: np.zeros((3, len(HORIZONS), nd)) for g in TIERS}
     tcnt = {g: np.zeros((3, len(HORIZONS), nd)) for g in TIERS}
     trades, signals, fwd, paths = [], [], [], []
+    usum, ucnt = np.zeros(nd), np.zeros(nd)
     est = 0
     mkt = portfolio.market_context(all_dates, [c for c, _, _ in allc], shares, con,
                                    p["breadth_ma"], st)
@@ -392,11 +393,17 @@ def run(p, st=None):
         if s is None:
             continue
         est += s.turn_est
-        tr, sg, fw, base, tiers = run_stock(s, p, date_index, mkt["breadth"], paths)
+        tr, sg, fw, base, tiers, elig = run_stock(s, p, date_index, mkt["breadth"], paths)
         trades += tr
         signals += sg
         fwd += fw
         idx = np.array([date_index[d] for d in s.dates])
+        # 同條件等權基準：前一天收盤符合篩選條件的股票，今天的報酬
+        if len(s.c) > 1:
+            rr = np.clip(s.c[1:] / s.c[:-1] - 1, -0.5, 0.5)
+            mk = elig[:-1]
+            np.add.at(usum, idx[1:][mk], rr[mk])
+            np.add.at(ucnt, idx[1:][mk], 1)
         for h, b in enumerate(base):
             ok = ~np.isnan(b)
             np.add.at(bsum[h], idx[ok], b[ok])
@@ -448,7 +455,9 @@ def run(p, st=None):
     last_date = all_dates[-1] if all_dates else None
     latest = [s for s in signals if s["date"] == last_date]
     st["msg"] = "投組模擬"
-    port = portfolio.simulate(trades, paths, all_dates, mkt["ew"], p["max_pos"], p["rank"])
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ew_u = np.cumprod(1 + np.where(ucnt >= 5, usum / np.maximum(ucnt, 1), 0.0))
+    port = portfolio.simulate(trades, paths, all_dates, ew_u, p["max_pos"], p["rank"])
     b_last = mkt["breadth"][-1] if len(mkt["breadth"]) else np.nan
     trades.sort(key=lambda t: t["entry_date"])
     summary = {**summarize(trades), "signals": len(signals),

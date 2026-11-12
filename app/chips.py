@@ -40,6 +40,9 @@ def load(code, shares=None, con=None):
             continue
         ref = raw[i, 3] - chg[i]
         prev = raw[i - 1, 3]
+        # 漲跌少了負號（下跌日只給絕對值）時：收盤＋漲跌＝前收，其實沒有除權息
+        if abs(raw[i, 3] + chg[i] - prev) < 1e-6 + prev * 1e-4 and abs(chg[i]) > 0:
+            continue
         if ref > 0 and prev > 0:
             f = ref / prev
             if abs(f - 1) > 0.002 and 0.05 < f < 20:
