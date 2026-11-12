@@ -40,22 +40,37 @@ def load(code, shares=None, con=None):
     events = []
     dates = [r[0] for r in rows]
     # 1) 官方除權息、減資參考價（adj_events 表）
+    #    大幅調整（>3%）要跟實際價格對得上：漲跌幅限制下，當天開盤一定在參考價 ±10% 內；
+    #    超出就是日期錯位或資料誤植，不採用（避免沒跳空卻被調整、憑空多出漲跌）
     official = {}
     for d, f in db.adj_for(code, con):
         official[d] = official.get(d, 1.0) * f
     for d, f in sorted(official.items()):
         i = bisect.bisect_left(dates, d)          # 除權息日沒成交就套到下一個有成交的日子
-        if 0 < i < n and 0.05 < f < 20 and abs(f - 1) > 0.0005:
+        if not (0 < i < n and 0.05 < f < 20 and abs(f - 1) > 0.0005):
+            continue
+        if abs(f - 1) > 0.03:
+            gap = np.log(raw[i, 0] / raw[i - 1, 3])
+            if abs(gap - np.log(f)) > 0.1:
+                continue
+        factor[:i] *= f
+        events.append((dates[i], round(f, 4)))
+    covered = {e[0] for e in events}
+    # 2) 官方表沒涵蓋、但開盤跳空超過漲跌停（減資、面額變更、分割）：
+    #    有漲跌就用「收盤−漲跌」當參考價（櫃買此時的漲跌是相對參考價）；
+    #    漲跌為 X（不比價）就用開盤價當參考價
+    for i in range(1, n):
+        if dates[i] in covered:
+            continue
+        prev = raw[i - 1, 3]
+        g = raw[i, 0] / prev
+        if 0.895 < g < 1.105:
+            continue
+        ref = raw[i, 3] - chg[i] if chg[i] is not None else raw[i, 0]
+        f = ref / prev if ref > 0 else g
+        if (f > 1.105 or f < 0.895) and 0.01 < f < 100:
             factor[:i] *= f
             events.append((dates[i], round(f, 4)))
-    covered = {e[0] for e in events}
-    # 2) 不比價（漲跌為 X）且開盤跳空超過漲跌停：減資、面額變更等官方表沒抓到的，用開盤當參考價
-    for i in range(1, n):
-        if chg[i] is None and dates[i] not in covered:
-            g = raw[i, 0] / raw[i - 1, 3]
-            if g > 1.105 or g < 0.895:
-                factor[:i] *= g
-                events.append((dates[i], round(g, 4)))
     events.sort()
 
     s = Series()

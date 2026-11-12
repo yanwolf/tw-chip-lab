@@ -228,11 +228,36 @@ db.save_day(snap, "2030-01-02", "TPEX", "ok")
 check(fetch._same_as_last(snap, "TPEX", date(2030, 1, 3)), "櫃買：跟前一天一模一樣 → 判定為快照")
 snap2 = [dict(r, close=r["close"] + 0.05) for r in snap]
 check(not fetch._same_as_last(snap2, "TPEX", date(2030, 1, 3)), "櫃買：正常變動 → 不誤判")
+# 面額變更（10 元→1 元）：櫃買漲跌相對參考價 → 用收盤−漲跌當參考價
+for i in range(80):
+    px = 720.0 if i < 50 else 79.2
+    chg6 = 7.2 if i == 50 else 0.0
+    db.save_day([{"code": "6666", "name": "面額*", "open": px, "high": px, "low": px, "close": px,
+                  "volume": 1e6, "value": 1e7, "change": chg6}], days[i], "TPEX", "ok")
+s6 = chips.load("6666", None)
+check(len(s6.events) == 1 and abs(s6.events[0][1] - 0.1) < 1e-6 and abs(s6.c[49] - 72) < 1e-6,
+      "面額變更：用收盤−漲跌推回參考價，價格連續")
+# 官方事件跟價格對不上（沒跳空）→ 不採用
+for i in range(80):
+    px = 40.0 + i * 0.1
+    db.save_day([{"code": "7777", "name": "錯位", "open": px, "high": px, "low": px, "close": px,
+                  "volume": 1e6, "value": 1e7, "change": 0.1}], days[i], "TWSE", "ok")
+db.save_adj([("7777", days[60], 0.676)], "TWSE_CR")
+s7 = chips.load("7777", None)
+check(len(s7.events) == 0, "官方事件但當天沒跳空 → 判定錯位、不採用")
+# 大額除息（5%）當天開盤漲停：仍要採用
+for i in range(80):
+    px = 100.0 if i < 60 else (95 * 1.1 if i == 60 else 104.5)
+    db.save_day([{"code": "8888", "name": "大息", "open": px, "high": px, "low": px, "close": px,
+                  "volume": 1e6, "value": 1e7, "change": None if i == 60 else 0.0}], days[i], "TWSE", "ok")
+db.save_adj([("8888", days[60], 0.95)], "TWSE_EX")
+s8 = chips.load("8888", None)
+check(len(s8.events) == 1 and abs(s8.events[0][1] - 0.95) < 1e-9, "大額除息當天開盤漲停 → 仍採用官方因子")
 from app import diag
 dg = diag.run(min_value=1e6)
 check(dg["events"] and dg["years"] and len(dg["extremes"]) > 0, "資料檢查有輸出")
 ev3 = {e["market"]: e for e in dg["events"]}["TWSE"]
-check(ev3["events"] == 2, "資料檢查：合成資料 2 個還原事件（除息＋減資）")
+check(ev3["events"] == 3, "資料檢查：上市 3 個還原事件，錯位事件不計")
 diag.DiagJob()._run()
 lr = diag.last_result()
 check(lr and lr["created"] and lr["events"], "資料檢查在背景跑完並存檔")
