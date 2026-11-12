@@ -261,4 +261,51 @@ check(ev3["events"] == 3, "資料檢查：上市 3 個還原事件，錯位事�
 diag.DiagJob()._run()
 lr = diag.last_result()
 check(lr and lr["created"] and lr["events"], "資料檢查在背景跑完並存檔")
+print("實盤追蹤")
+from app import live
+db.set_setting("live_bench", {"00878": 1.0})
+check(fetch.is_stock("00878", fetch.bench_codes()) and not fetch.is_stock("00878"), "對照 ETF 抓資料時保留，一般情況排除")
+for i, ds in enumerate(days):
+    px = round(20 * (1.0005 ** i), 2)
+    fetch._save_one({"code": "00878", "name": "國泰永續高股息", "open": px, "high": px, "low": px, "close": px,
+                     "volume": 1e7, "value": 2e8, "change": 0.0}, ds, "TWSE")
+check(all(c != "00878" for c, _, _ in db.codes()), "ETF 不會進回測母體")
+db.live_insert("live_cash", {"date": days[400], "amount": 10000, "note": ""})
+db.live_insert("live_cash", {"date": days[420], "amount": 10000, "note": ""})
+p1111 = series["1111"][401][1]
+live.add_fill(days[401], "1111", "buy", p1111, 100)
+st0 = live.state()
+exp_cash = 20000 - p1111 * 100 - max(1, round(p1111 * 100 * 0.001425 * 0.6))
+check(abs(st0["cash"] - round(exp_cash)) <= 1, "現金＝入金−買進金額−手續費")
+check(len(st0["holdings"]) == 1 and st0["holdings"][0]["days"] == len(days) - 401, "持股與持有天數")
+h = st0["holdings"][0]
+check(h["stop"] > 0 and h["trail_line"] > 0, "停損價、移動停利線有算出來")
+exp_b = 10000 / (20 * 1.0005 ** 400) * (20 * 1.0005 ** 519) + 10000 / (20 * 1.0005 ** 420) * (20 * 1.0005 ** 519)
+check(abs(st0["bench_value"] - exp_b) < 5, "ETF 對照：每筆入金照當日價買進")
+# 持有到期 → 賣出建議
+live.add_fill(days[300], "2222", "buy", series["2222"][300][1], 10)
+st1 = live.state()
+s2 = next(x for x in st1["sells"] if x["code"] == "2222")
+check(s2["reason"] in ("持有到期", "停損", "移動停利"), f"超過 60 天的持股列入明日賣出（{s2['reason']}）")
+# 賣出後部位與已實現損益
+fid = live.add_fill(days[-1], "2222", "sell", series["2222"][-1][4], 10)
+st2 = live.state()
+check(all(h["code"] != "2222" for h in st2["holdings"]), "賣出後部位歸零")
+db.live_delete("live_fills", fid)
+check(any(h["code"] == "2222" for h in live.state()["holdings"]), "刪除成交紀錄可還原")
+res = live.scan()
+check(res["date"] == db.stats()["last"] and isinstance(res["signals"], list) and live.last_scan()["created"], "每日掃描完成並存檔")
+import json as _j
+with open(live.SCAN_PATH, "w", encoding="utf-8") as _f:
+    _j.dump({"date": "x", "created": "x", "signals": [
+        {"code": "3333", "name": "甲", "conc90": 0.05, "raw_close": 40.0, "low": 38.0},
+        {"code": "1111", "name": "已持有", "conc90": 0.06, "raw_close": 30.0, "low": 28.0},
+        {"code": "4444", "name": "乙", "conc90": 0.07, "raw_close": 20.0, "low": 19.0}]}, _f)
+st3 = live.state()
+bcodes = [x["code"] for x in st3["buys"]]
+check("1111" not in bcodes and (not bcodes or bcodes[0] == "3333"), "買進建議：跳過已持有、集中度小的優先")
+check(all(x["limit"] == live.floor_tick(x["close"] * 1.03) and x["amount"] <= max(st3["equity"] / 10, 5000) + 1
+          for x in st3["buys"]), "買進建議：限價＝前收×1.03，金額不超過每檔預算")
+check(len(bcodes) <= st3["free_slots"], "買進建議不超過空位（含資金不足時減少檔數）")
+check(live.floor_tick(123.37) == 123.0 and live.floor_tick(45.33) == 45.3 and live.floor_tick(9.876) == 9.87, "限價依升降單位取整")
 print(f"\n全部通過：{ok} 項")

@@ -62,8 +62,19 @@ def num(s):
         return None
 
 
-def is_stock(code):
-    """一般普通股：4 碼數字、非 00 開頭（ETF）、非 91 開頭（TDR）。"""
+def bench_codes():
+    """實盤對照用的 ETF（例如 00878、00981A），抓資料時一併保留。"""
+    try:
+        cfg = db.get_setting("live_bench") or {}
+        return {c.upper() for c in cfg}
+    except Exception:
+        return set()
+
+
+def is_stock(code, keep=None):
+    """一般普通股：4 碼數字、非 00 開頭（ETF）、非 91 開頭（TDR）；keep 內的代號也保留。"""
+    if keep and code.upper() in keep:
+        return True
     return bool(re.fullmatch(r"[1-9]\d{3}", code)) and not code.startswith("91")
 
 
@@ -107,9 +118,10 @@ def parse_twse(js):
         if miss:
             raise ValueError(f"證交所欄位缺少：{miss}")
         rows = []
+        keep = bench_codes()
         for r in data:
             code = str(r[ix["證券代號"]]).strip()
-            if not is_stock(code):
+            if not is_stock(code, keep):
                 continue
             sign_raw = re.sub(r"<[^>]*>", "", str(r[ix["漲跌(+/-)"]])).strip()
             diff = num(r[ix["漲跌價差"]])
@@ -144,7 +156,7 @@ def parse_tpex(js):
             raise ValueError(f"櫃買欄位缺少：{miss}")
         return [_row(str(r[ix["code"]]).strip(), r[ix["name"]], r[ix["open"]], r[ix["high"]],
                      r[ix["low"]], r[ix["close"]], r[ix["vol"]], r[ix["amt"]], num(r[ix["chg"]]))
-                for r in data if is_stock(str(r[ix["code"]]).strip())]
+                for r in data if is_stock(str(r[ix["code"]]).strip(), bench_codes())]
     if "aaData" in js:                   # 舊版：固定欄位順序
         data = js.get("aaData") or []
         if not data:
@@ -222,6 +234,62 @@ def fetch_tpex(d):
     raise last
 
 
+# ---------- 單一證券月資料（補實盤對照 ETF 的歷史） ----------
+STOCK_DAY_URL = "https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY?date={d:%Y%m}01&stockNo={code}&response=json"
+
+
+def fetch_stock_day(code, month):
+    """證交所個股月成交資訊；回傳 [(date, row)]。"""
+    js = http_json(STOCK_DAY_URL.format(d=month, code=code))
+    if str(js.get("stat", "")).upper() != "OK":
+        return []
+    out = []
+    for fields, data in _tables(js):
+        di, ci = _col(fields, "日期"), _col(fields, "收盤價")
+        if di is None or ci is None:
+            continue
+        ix = {k: _col(fields, k) for k in ("成交股數", "成交金額", "開盤價", "最高價", "最低價", "漲跌價差")}
+        name = re.sub(r"^\d+\s*年\d+月\s*\S+\s*", "", str(js.get("title", ""))).split(" ")[0] or code
+        for r in data:
+            d = parse_date_any(r[di])
+            chg_raw = str(r[ix["漲跌價差"]]).strip() if ix["漲跌價差"] is not None else ""
+            chg = None if chg_raw.startswith("X") else num(chg_raw)
+            out.append((d, _row(code, name, r[ix["開盤價"]], r[ix["最高價"]], r[ix["最低價"]],
+                                r[ci], r[ix["成交股數"]], r[ix["成交金額"]], chg)))
+    return out
+
+
+def backfill_code(code, start, market="TWSE"):
+    """補某檔從 start 到今天的日資料；已補過的完整月份會跳過。"""
+    log = db.fetched("BENCH_" + code)
+    end = today_tpe()
+    cur_month = f"{end:%Y-%m}"
+    m = date(start.year, start.month, 1)
+    n = 0
+    while m <= end:
+        key = f"{m:%Y-%m}"
+        if log.get(key) != "ok" or key == cur_month:
+            rows = fetch_stock_day(code, m)
+            for d, row in rows:
+                if d:
+                    _save_one(row, d, market)
+                    n += 1
+            db.log_fetch(key, "BENCH_" + code, "ok", len(rows))
+            time.sleep(INTERVAL)
+        m = date(m.year + (m.month == 12), m.month % 12 + 1, 1)
+    return n
+
+
+def _save_one(row, d, market):
+    with db._lock:
+        con = db.connect()
+        con.execute("INSERT OR REPLACE INTO daily VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    (row["code"], d, market, row["name"], row["open"], row["high"], row["low"],
+                     row["close"], row["volume"], row["value"], row["change"]))
+        con.commit()
+        con.close()
+
+
 # ---------- 除權息、減資（官方參考價） ----------
 ADJ_SOURCES = {
     "TWSE_EX": ["https://www.twse.com.tw/rwd/zh/exRight/TWT49U?startDate={a:%Y%m%d}&endDate={b:%Y%m%d}&response=json"],
@@ -266,7 +334,7 @@ def parse_adj(js, kind):
                 out.append((str(r[b]).strip(), parse_date_any(r[a]), num(r[c]), num(r[e])))
     res = []
     for code, d, prev, ref in out:
-        if d and prev and ref and prev > 0 and ref > 0 and is_stock(code):
+        if d and prev and ref and prev > 0 and ref > 0 and is_stock(code, bench_codes()):
             res.append((code, d, round(ref / prev, 6)))
     if not matched and "沒有符合" not in str(js.get("stat", "")) and js.get("tables") != []:
         return None

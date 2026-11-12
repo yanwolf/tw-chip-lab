@@ -87,6 +87,7 @@ canvas{width:100%;display:block}
   <button role="tab" data-t="data" aria-selected="true">資料</button>
   <button role="tab" data-t="bt" aria-selected="false">回測</button>
   <button role="tab" data-t="chip" aria-selected="false">籌碼圖</button>
+  <button role="tab" data-t="live" aria-selected="false">實盤</button>
 </nav>
 
 <!-- 資料 -->
@@ -191,6 +192,42 @@ canvas{width:100%;display:block}
     <p class="note" id="cNote"></p>
   </div>
 </section>
+<!-- 實盤 -->
+<section id="t-live">
+  <div class="panel"><h2>帳戶總覽</h2><div class="grid" id="lvSum"></div>
+    <div class="row" style="margin-top:10px"><button class="ghost" id="lvScan">重新掃描訊號</button><span class="sub" id="lvScanMsg"></span></div>
+    <p class="note">收盤資料更新後會自動掃描。ETF 對照＝同樣每筆入金照比例買進對照 ETF（含息），用相同現金流比較。</p></div>
+  <div class="panel"><h2>明日動作</h2><div id="lvActions"></div></div>
+  <div class="panel"><h2>持股</h2><div class="scroll" id="lvHold"></div></div>
+  <div class="panel"><h2>記錄</h2>
+    <fieldset><legend>入金</legend><div class="row">
+      <label style="flex:1;min-width:130px">日期<input type="date" id="cDateIn"></label>
+      <label style="flex:1;min-width:100px">金額<input type="number" id="cAmt" value="10000" step="1000"></label>
+      <button class="act" id="cAdd" style="align-self:flex-end">記錄入金</button></div></fieldset>
+    <fieldset><legend>成交</legend><div class="grid">
+      <label>日期<input type="date" id="fDate"></label>
+      <label>代號<input id="fCode" inputmode="numeric"></label>
+      <label>買／賣<select id="fSide"><option value="buy">買進</option><option value="sell">賣出</option></select></label>
+      <label>成交價<input type="number" id="fPrice" step="0.01"></label>
+      <label>股數<input type="number" id="fShares" step="1"></label>
+      <label>手續費（空白自動算）<input type="number" id="fFee" step="1"></label>
+    </div><div class="row" style="margin-top:8px"><button class="act" id="fAdd">記錄成交</button><span class="err" id="fErr"></span></div></fieldset>
+  </div>
+  <div class="panel"><h2>紀錄明細</h2><div class="scroll" id="lvLog"></div></div>
+  <div class="panel"><h2>設定</h2>
+    <div class="row"><label style="width:120px">套用回測 #<input type="number" id="sRun"></label><button class="ghost" id="sApply" style="align-self:flex-end">套用參數</button><span class="sub" id="sCur"></span></div>
+    <div class="grid" style="margin-top:10px">
+      <label>最多持有（檔）<input type="number" id="sMax"></label>
+      <label>每檔最低金額<input type="number" id="sMin" step="1000"></label>
+      <label>買進限價＝前收 ×<input type="number" id="sLim" step="0.01"></label>
+      <label>手續費折扣<input type="number" id="sDisc" step="0.05"></label>
+      <label>每筆最低手續費<input type="number" id="sMinFee" step="1"></label>
+      <label style="grid-column:span 2">對照 ETF（代號:比例）<input id="sBench" placeholder="00878:0.5, 00981A:0.5"></label>
+    </div>
+    <div class="row" style="margin-top:8px"><button class="act" id="sSave">儲存設定</button></div>
+    <p class="note">最低手續費請依券商零股規定填寫；每檔投入＝帳戶總值 ÷ 最多持有檔數，錢不夠開滿時會自動少開幾檔。</p>
+  </div>
+</section>
 </div>
 
 <script>
@@ -210,7 +247,7 @@ $('#loginBtn').onclick=async()=>{try{await post('/api/login',{password:$('#pw').
 $('#pw').onkeydown=e=>{if(e.key==='Enter')$('#loginBtn').click()};
 
 $$('nav button').forEach(b=>b.onclick=()=>tab(b.dataset.t));
-function tab(t){$$('nav button').forEach(b=>b.setAttribute('aria-selected',b.dataset.t===t));
+function tab(t){if(t==='live')loadLive();$$('nav button').forEach(b=>b.setAttribute('aria-selected',b.dataset.t===t));
   $$('section').forEach(s=>s.classList.toggle('on',s.id==='t-'+t));if(t==='chip'&&lastChip)drawChip(lastChip)}
 
 // ---------- 狀態 ----------
@@ -402,6 +439,46 @@ function drawChip(v){const cv=$('#cv'),css=getComputedStyle(document.documentEle
   hl(v.m.p95,col('--muted'),[4,4],'上緣 '+v.m.p95);hl(v.m.p5,col('--muted'),[4,4],'下緣 '+v.m.p5);hl(v.m.poc,col('--gold'),[],'');
   g.fillStyle=col('--muted');g.fillText(b.d[0],0,H-6);const ld=b.d.at(-1);g.fillText(ld,cw-g.measureText(ld).width,H-6)}
 addEventListener('resize',()=>{if(lastChip&&$('#t-chip').classList.contains('on'))drawChip(lastChip)});
+
+// ---------- 實盤 ----------
+let LV=null,lvPoll=null;
+const twd=n=>n==null?'—':Math.round(n).toLocaleString('zh-TW');
+async function loadLive(){let d;try{d=await api('/api/live')}catch(e){return}LV=d;renderLive(d);
+  clearTimeout(lvPoll);if(d.job.running)lvPoll=setTimeout(loadLive,3000)}
+function renderLive(d){
+  ['cDateIn','fDate'].forEach(id=>{if(!$('#'+id).value)$('#'+id).value=d.today});
+  const diff=d.ret!=null&&d.bench_ret!=null?d.ret-d.bench_ret:null;
+  $('#lvSum').innerHTML=[['累計入金',twd(d.deposited)],['策略總值',twd(d.equity)],['策略報酬',pct(d.ret,1),cls(d.ret)],
+    ['ETF 對照總值',d.bench_value!=null?twd(d.bench_value):'資料準備中'],['ETF 對照報酬',pct(d.bench_ret,1),cls(d.bench_ret)],
+    ['策略 − ETF',pct(diff,1),cls(diff)],['現金',twd(d.cash)],['持股市值',twd(d.market_value)],['已實現損益',twd(d.realized),cls(d.realized)]]
+    .map(([k,v,c])=>`<div class="kv"><small>${k}</small><b class="${c||''}">${v}</b></div>`).join('');
+  const j=d.job;$('#lvScan').disabled=j.running;
+  $('#lvScanMsg').innerHTML=j.running?esc(j.msg)+(j.total?`（${fmt(j.done)} / ${fmt(j.total)}）`:'')
+    :(d.scan?`訊號資料日 ${d.scan.date}・${d.scan_count} 個訊號・掃描於 ${d.scan.created.slice(5,16).replace('T',' ')}`:'尚未掃描')+(j.error?`<div class="err">${esc(j.error)}</div>`:'');
+  const sells=d.sells.length?`<h2 style="font-size:14px">賣出（明天盤中零股）</h2><table><thead><tr><th class="l">代號</th><th class="l">名稱</th><th>股數</th><th class="l">原因</th><th>約當金額</th><th></th></tr></thead><tbody>`+
+    d.sells.map(x=>`<tr tabindex="-1"><td class="l">${x.code}</td><td class="l">${esc(x.name)}</td><td>${fmt(x.shares)}</td><td class="l"><span class="pill run">${x.reason}</span></td><td>${twd(x.est)}</td><td><button class="ghost" style="padding:4px 10px" data-fill="sell" data-code="${x.code}" data-shares="${x.shares}">記錄</button></td></tr>`).join('')+'</tbody></table>':'';
+  const buys=d.buys.length?`<h2 style="font-size:14px;margin-top:10px">買進（空位 ${d.free_slots}，依集中度由小到大）</h2><table><thead><tr><th class="l">代號</th><th class="l">名稱</th><th>股數</th><th>限價</th><th>金額</th><th>集中度</th><th></th></tr></thead><tbody>`+
+    d.buys.map(x=>`<tr tabindex="-1"><td class="l">${x.code}</td><td class="l">${esc(x.name)}</td><td>${fmt(x.shares)}</td><td>${x.limit}</td><td>${twd(x.amount)}</td><td>${(x.conc90*100).toFixed(1)}%</td><td><button class="ghost" style="padding:4px 10px" data-fill="buy" data-code="${x.code}" data-shares="${x.shares}" data-price="${x.limit}">記錄</button></td></tr>`).join('')+'</tbody></table><p class="note">開盤已接近漲停（超過前收 9.5%）就不要追，跟回測規則一致。實際成交後按「記錄」填入成交價。</p>':'';
+  $('#lvActions').innerHTML=(sells+buys)||`<p class="mut">${d.scan?'明天沒有要做的事。':'還沒有掃描結果，先按「重新掃描訊號」。'}${d.deposited?'':' 先在下面記錄第一筆入金。'}</p>`;
+  $$('#lvActions [data-fill]').forEach(b=>b.onclick=()=>{$('#fSide').value=b.dataset.fill;$('#fCode').value=b.dataset.code;$('#fShares').value=b.dataset.shares;
+    $('#fPrice').value=b.dataset.price||'';$('#fDate').value=d.today;$('#fPrice').focus();$('#fPrice').scrollIntoView({block:'center'})});
+  $('#lvHold').innerHTML=d.holdings.length?`<table><thead><tr><th class="l">代號</th><th class="l">名稱</th><th class="l">進場日</th><th>股數</th><th>成本</th><th>現價</th><th>損益</th><th>停損價</th><th>停利線</th><th>天數</th></tr></thead><tbody>`+
+    d.holdings.map(h=>`<tr data-code="${h.code}" tabindex="0"><td class="l">${h.code}${h.exit?' <span class="pill run">賣</span>':''}</td><td class="l">${esc(h.name)}</td><td class="l">${h.entry_date}</td><td>${fmt(h.shares)}</td><td>${h.cost}</td><td>${h.last??'—'}</td><td class="${cls(h.pnl)}">${pct(h.pnl,1)}</td><td>${h.stop??'—'}</td><td>${h.trail_line??'—'}</td><td>${h.days??'—'}/${h.max_hold??60}</td></tr>`).join('')+'</tbody></table>':'<p class="mut">目前沒有持股。</p>';
+  bindRows($('#lvHold'));
+  const logs=[...d.cash_rows.map(r=>({...r,t:'live_cash',k:'入金',txt:twd(r.amount)})),...d.fills.map(f=>({...f,t:'live_fills',k:f.side==='buy'?'買進':'賣出',txt:`${f.code} ${fmt(f.shares)} 股 @ ${f.price}（費 ${twd(f.fee)}${f.tax?'、稅 '+twd(f.tax):''}）`}))]
+    .sort((a,b)=>a.date<b.date?1:a.date>b.date?-1:b.id-a.id);
+  $('#lvLog').innerHTML=logs.length?`<table><tbody>`+logs.map(l=>`<tr tabindex="-1"><td class="l">${l.date}</td><td class="l">${l.k}</td><td class="l">${l.txt}</td><td><button class="ghost" style="padding:2px 9px" data-del="${l.t}:${l.id}" aria-label="刪除">×</button></td></tr>`).join('')+'</tbody></table>':'<p class="mut">還沒有紀錄。</p>';
+  $$('#lvLog [data-del]').forEach(b=>b.onclick=async()=>{if(!confirm('刪除這筆紀錄？'))return;const [t,id]=b.dataset.del.split(':');await post('/api/live/delete',{table:t,id});loadLive()});
+  const c=d.cfg;$('#sMax').value=c.max_pos;$('#sMin').value=c.min_order;$('#sLim').value=c.limit_up;$('#sDisc').value=c.fee_discount;$('#sMinFee').value=c.min_fee;
+  $('#sBench').value=Object.entries(d.bench).map(([k,v])=>`${k}:${+v.toFixed(3)}`).join(', ');
+  $('#sCur').textContent=`目前參數來自回測 #${c.from_run}：集中度 ${c.params.conc_th}、成交額 ${c.params.min_value/1e8}～${c.params.max_value?c.params.max_value/1e8:'∞'} 億、市值 ≤ ${c.params.max_mcap||'∞'} 億、停利 ${c.params.trail}、持有 ${c.params.max_hold}、停損 ${c.params.max_stop}`}
+$('#lvScan').onclick=async()=>{try{await post('/api/live/scan')}catch(e){}loadLive()};
+$('#cAdd').onclick=async()=>{try{await post('/api/live/cash',{date:$('#cDateIn').value,amount:$('#cAmt').value});loadLive()}catch(e){alert(e.message)}};
+$('#fAdd').onclick=async()=>{$('#fErr').textContent='';try{await post('/api/live/fill',{date:$('#fDate').value,code:$('#fCode').value,side:$('#fSide').value,
+  price:$('#fPrice').value,shares:$('#fShares').value,fee:$('#fFee').value});['fCode','fPrice','fShares','fFee'].forEach(i=>$('#'+i).value='');loadLive()}catch(e){$('#fErr').textContent=e.message}};
+$('#sApply').onclick=async()=>{try{await post('/api/live/apply_run',{id:$('#sRun').value});alert('已套用，按「重新掃描訊號」更新買進建議');loadLive()}catch(e){alert(e.message)}};
+$('#sSave').onclick=async()=>{const bench={};$('#sBench').value.split(/[,，、]/).forEach(x=>{const [k,v]=x.split(/[:：]/);if(k&&k.trim())bench[k.trim()]=+v||1});
+  try{await post('/api/live/cfg',{max_pos:$('#sMax').value,min_order:$('#sMin').value,limit_up:$('#sLim').value,fee_discount:$('#sDisc').value,min_fee:$('#sMinFee').value,bench});alert('已儲存');loadLive()}catch(e){alert(e.message)}};
 
 async function boot(){await refresh();pollDiag();if(Object.keys(DEF).length&&!curRun)fillForm(DEF);
   const rs=await api('/api/runs').catch(()=>[]);if(rs.length&&!curRun){await loadRuns();openRun(rs[0].id)}}

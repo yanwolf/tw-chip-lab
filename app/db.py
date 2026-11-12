@@ -28,6 +28,16 @@ CREATE TABLE IF NOT EXISTS adj_events (
   code TEXT, date TEXT, factor REAL, source TEXT,
   PRIMARY KEY (code, date, source)
 );
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY, value TEXT
+);
+CREATE TABLE IF NOT EXISTS live_cash (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, amount REAL, note TEXT
+);
+CREATE TABLE IF NOT EXISTS live_fills (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, code TEXT, side TEXT,
+  price REAL, shares INTEGER, fee REAL, tax REAL, note TEXT
+);
 CREATE TABLE IF NOT EXISTS runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   created TEXT, params TEXT, summary TEXT, result TEXT
@@ -136,12 +146,15 @@ def load_shares():
     return out
 
 
-def codes():
+def codes(all_codes=False):
+    """預設只回傳一般普通股（4 碼、非 00 開頭）；實盤對照用的 ETF 不進回測母體。"""
     con = connect()
     out = con.execute(
         "SELECT code, MAX(name), MAX(market) FROM daily GROUP BY code").fetchall()
     con.close()
-    return out
+    if all_codes:
+        return out
+    return [r for r in out if len(r[0]) == 4 and r[0].isdigit() and r[0][0] != "0"]
 
 
 def series(code, con=None):
@@ -209,5 +222,49 @@ def delete_run(rid):
     with _lock:
         con = connect()
         con.execute("DELETE FROM runs WHERE id=?", (rid,))
+        con.commit()
+        con.close()
+
+
+def get_setting(key, default=None):
+    con = connect()
+    r = con.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+    con.close()
+    return json.loads(r[0]) if r else default
+
+
+def set_setting(key, value):
+    with _lock:
+        con = connect()
+        con.execute("INSERT OR REPLACE INTO settings VALUES (?,?)", (key, json.dumps(value, ensure_ascii=False)))
+        con.commit()
+        con.close()
+
+
+def live_rows(table):
+    con = connect()
+    cur = con.execute(f"SELECT * FROM {table} ORDER BY date, id")
+    cols = [c[0] for c in cur.description]
+    out = [dict(zip(cols, r)) for r in cur.fetchall()]
+    con.close()
+    return out
+
+
+def live_insert(table, row):
+    with _lock:
+        con = connect()
+        keys = list(row)
+        cur = con.execute(f"INSERT INTO {table} ({','.join(keys)}) VALUES ({','.join('?' * len(keys))})",
+                          [row[k] for k in keys])
+        rid = cur.lastrowid
+        con.commit()
+        con.close()
+    return rid
+
+
+def live_delete(table, rid):
+    with _lock:
+        con = connect()
+        con.execute(f"DELETE FROM {table} WHERE id=?", (rid,))
         con.commit()
         con.close()

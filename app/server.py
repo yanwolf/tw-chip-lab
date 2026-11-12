@@ -16,7 +16,7 @@ from datetime import date, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from . import backtest, db, diag, fetch
+from . import backtest, db, diag, fetch, live
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
 STATIC = os.path.join(os.path.dirname(__file__), "static")
@@ -82,6 +82,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200 if r else 404, r or {"error": "找不到這次回測"})
             if u.path == "/api/diag":
                 return self._send(200, {"state": diag.JOB.state, "result": diag.last_result()})
+            if u.path == "/api/live":
+                return self._send(200, {**live.state(), "job": live.JOB.state, "today": live.today()})
             if u.path == "/api/chips":
                 code = (q.get("code") or "").strip()
                 v = backtest.chip_view(code, q.get("date") or None,
@@ -116,6 +118,38 @@ class H(BaseHTTPRequestHandler):
             if u.path == "/api/diag":
                 ok = diag.JOB.start()
                 return self._send(200 if ok else 409, {"ok": ok} if ok else {"error": "檢查已在進行中"})
+            if u.path == "/api/live/cash":
+                rid = db.live_insert("live_cash", {"date": b["date"], "amount": float(b["amount"]),
+                                                   "note": b.get("note", "")})
+                return self._send(200, {"id": rid})
+            if u.path == "/api/live/fill":
+                if b.get("side") not in ("buy", "sell"):
+                    raise ValueError("買賣方向錯誤")
+                if not b.get("code") or float(b.get("price") or 0) <= 0 or int(b.get("shares") or 0) <= 0:
+                    raise ValueError("代號、價格、股數都要填")
+                rid = live.add_fill(b["date"], b["code"], b["side"], float(b["price"]), int(b["shares"]),
+                                    b.get("fee"), b.get("tax"), b.get("note", ""))
+                return self._send(200, {"id": rid})
+            if u.path == "/api/live/delete":
+                if b.get("table") not in ("live_cash", "live_fills"):
+                    raise ValueError("table 錯誤")
+                db.live_delete(b["table"], int(b["id"]))
+                return self._send(200, {"ok": True})
+            if u.path == "/api/live/scan":
+                ok = live.JOB.start()
+                return self._send(200 if ok else 409, {"ok": ok} if ok else {"error": "掃描進行中"})
+            if u.path == "/api/live/cfg":
+                c = live.cfg()
+                for k in ("max_pos", "min_order", "limit_up", "min_fee", "fee_discount"):
+                    if k in b and b[k] not in (None, ""):
+                        c[k] = float(b[k]) if k in ("limit_up", "fee_discount") else int(float(b[k]))
+                db.set_setting("live_cfg", c)
+                if isinstance(b.get("bench"), dict) and b["bench"]:
+                    tot = sum(float(v) for v in b["bench"].values()) or 1
+                    db.set_setting("live_bench", {k.strip().upper(): float(v) / tot for k, v in b["bench"].items()})
+                return self._send(200, {"ok": True})
+            if u.path == "/api/live/apply_run":
+                return self._send(200, live.apply_run(b["id"]))
             if u.path == "/api/adj":
                 ok = fetch.JOB.start_adj()
                 return self._send(200 if ok else 409, {"ok": ok} if ok else {"error": "抓取正在進行中"})
@@ -140,6 +174,9 @@ class H(BaseHTTPRequestHandler):
 
 def main():
     db.init()
+    if not db.get_setting("live_bench"):
+        db.set_setting("live_bench", live.DEFAULT_BENCH)
+    threading.Thread(target=live.auto_loop, daemon=True).start()
     if os.environ.get("AUTO_UPDATE") == "1":
         threading.Thread(target=fetch.auto_update_loop, daemon=True).start()
     port = int(os.environ.get("PORT", "8000"))
